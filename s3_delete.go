@@ -7,11 +7,12 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 // deleteObjectsByPrefix finds objects by prefix and either:
 // - prints what would be deleted (dry-run)
-// - actually deletes them (dry-run=false)
+// - deletes them in batches of up to 1000 objects (dry-run=false)
 func deleteObjectsByPrefix(ctx context.Context, client *s3.Client, bucket, prefix string, maxKeys int32, dryRun bool) {
 	if prefix == "" {
 		log.Fatal("for delete, --prefix is required as a safety measure")
@@ -48,6 +49,9 @@ func deleteObjectsByPrefix(ctx context.Context, client *s3.Client, bucket, prefi
 		fmt.Printf("  KeyCount: %d\n", aws.ToInt32(resp.KeyCount))
 		fmt.Printf("  IsTruncated: %v\n", aws.ToBool(resp.IsTruncated))
 
+		// Build a batch of objects for DeleteObjects
+		var batch []types.ObjectIdentifier
+
 		for _, obj := range resp.Contents {
 			key := aws.ToString(obj.Key)
 			totalMatched++
@@ -57,16 +61,15 @@ func deleteObjectsByPrefix(ctx context.Context, client *s3.Client, bucket, prefi
 				continue
 			}
 
-			_, err := client.DeleteObject(ctx, &s3.DeleteObjectInput{
-				Bucket: aws.String(bucket),
-				Key:    aws.String(key),
+			batch = append(batch, types.ObjectIdentifier{
+				Key: aws.String(key),
 			})
-			if err != nil {
-				log.Fatalf("failed to delete object %s: %v", key, err)
-			}
+		}
 
-			totalDeleted++
-			fmt.Printf("Deleted: %s\n", key)
+		// Only call DeleteObjects when not in dry-run mode and batch has items
+		if !dryRun && len(batch) > 0 {
+			deletedCount := deleteBatch(ctx, client, bucket, batch)
+			totalDeleted += deletedCount
 		}
 
 		if !aws.ToBool(resp.IsTruncated) {
@@ -84,4 +87,36 @@ func deleteObjectsByPrefix(ctx context.Context, client *s3.Client, bucket, prefi
 	} else {
 		fmt.Printf("  Total deleted: %d\n", totalDeleted)
 	}
+}
+
+// deleteBatch deletes up to 1000 objects in one S3 API call.
+func deleteBatch(ctx context.Context, client *s3.Client, bucket string, batch []types.ObjectIdentifier) int {
+	fmt.Printf("  Deleting batch of %d objects...\n", len(batch))
+
+	resp, err := client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+		Bucket: aws.String(bucket),
+		Delete: &types.Delete{
+			Objects: batch,
+			Quiet:   aws.Bool(false), // false = S3 returns details about deleted objects
+		},
+	})
+	if err != nil {
+		log.Fatalf("batch delete failed: %v", err)
+	}
+
+	// Report objects S3 says were deleted
+	for _, d := range resp.Deleted {
+		fmt.Printf("Deleted: %s\n", aws.ToString(d.Key))
+	}
+
+	// Report any per-object errors returned by S3
+	for _, e := range resp.Errors {
+		fmt.Printf("Delete error: key=%s code=%s message=%s\n",
+			aws.ToString(e.Key),
+			aws.ToString(e.Code),
+			aws.ToString(e.Message),
+		)
+	}
+
+	return len(resp.Deleted)
 }
