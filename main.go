@@ -1,170 +1,131 @@
 package main
 
 import (
-	"crypto/sha256"
+	"context"
 	"flag"
 	"fmt"
-	"io"
-	"net/http"
-	"sort"
-	"strings"
-	"time"
+	"log"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
+// Version marker so you know where you are in development
+const version = "0.3"
+
+// main is the entry point of the program
 func main() {
-	endpoint := flag.String("endpoint", "", "Base URL, for example https://example.com")
-	method := flag.String("method", "GET", "HTTP method")
-	path := flag.String("path", "/", "Request path")
-	query := flag.String("query", "", "Query string")
-	region := flag.String("region", "us-east-1", "AWS region for signing")
+	// ---- CLI FLAGS ----
+	// These let you control the program from PowerShell
+	endpoint := flag.String("endpoint", "", "S3 endpoint, for example https://s3.example.local")
+	region := flag.String("region", "us-east-1", "AWS region")
+	accessKey := flag.String("access-key", "", "S3 access key")
+	secretKey := flag.String("secret-key", "", "S3 secret key")
+	bucket := flag.String("bucket", "", "Bucket name")
+	prefix := flag.String("prefix", "", "Optional prefix filter")
+	maxKeys := flag.Int("max-keys", 1000, "Max objects per request (pagination size)")
 
 	flag.Parse()
 
-	fmt.Println("S3Manager starting...")
+	fmt.Println("S3Manager v" + version)
 
-	if *endpoint == "" {
-		fmt.Println("ERROR: endpoint is required")
-		return
+	// Basic validation: we cannot continue without these required inputs
+	if *endpoint == "" || *accessKey == "" || *secretKey == "" || *bucket == "" {
+		log.Fatal("endpoint, access-key, secret-key, and bucket are required")
 	}
 
-	sendRequest(*endpoint, *method, *path, *query, *region)
+	// Context is used by Go for request lifecycle handling
+	// Later this can also be used for cancellation and timeouts
+	ctx := context.Background()
+
+	// ---- LOAD AWS SDK CONFIG ----
+	// This creates the shared AWS configuration object used by the SDK client
+	cfg, err := awsconfig.LoadDefaultConfig(
+		ctx,
+
+		// Region is still needed for signing, even with S3-compatible endpoints
+		awsconfig.WithRegion(*region),
+
+		// We use static credentials provided on the command line
+		awsconfig.WithCredentialsProvider(
+			credentials.NewStaticCredentialsProvider(*accessKey, *secretKey, ""),
+		),
+	)
+	if err != nil {
+		log.Fatalf("failed to load AWS config: %v", err)
+	}
+
+	// ---- CREATE S3 CLIENT ----
+	// This is the object that will make real S3 API calls
+	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
+		// Many S3-compatible systems, including StorageGRID, often work best with path-style requests
+		// Example: https://endpoint/bucket/object
+		o.UsePathStyle = true
+
+		// Override the normal AWS S3 endpoint with your own S3-compatible endpoint
+		o.BaseEndpoint = aws.String(*endpoint)
+	})
+
+	// ---- START LISTING OBJECTS ----
+	listAllObjects(ctx, client, *bucket, *prefix, int32(*maxKeys))
 }
 
-func sendRequest(endpoint, method, path, query, region string) {
-	url := endpoint + path
-	if query != "" {
-		url = url + "?" + query
-	}
+// listAllObjects retrieves all objects in a bucket by following pagination until the end
+func listAllObjects(ctx context.Context, client *s3.Client, bucket, prefix string, maxKeys int32) {
+	// ContinuationToken tells S3 where the next page should continue
+	// nil means: start at the beginning
+	var continuationToken *string
 
-	fmt.Println("Preparing request...")
-	fmt.Println("Method:", method)
-	fmt.Println("Endpoint:", endpoint)
-	fmt.Println("Path:", path)
-	fmt.Println("Query:", query)
-	fmt.Println("Full URL:", url)
+	pageNumber := 0
+	totalObjects := 0
 
-	req, err := http.NewRequest(method, url, nil)
-	if err != nil {
-		fmt.Println("Failed to create request:", err)
-		return
-	}
+	// Keep requesting pages until S3 tells us there are no more pages
+	for {
+		pageNumber++
 
-	req.Header.Set("User-Agent", "S3Manager-Go-Learning/0.1")
+		// Build the request for this page
+		input := &s3.ListObjectsV2Input{
+			// Required bucket name
+			Bucket: aws.String(bucket),
 
-	amzDate := time.Now().UTC().Format("20060102T150405Z")
-	req.Header.Set("x-amz-date", amzDate)
+			// Optional prefix filter, similar to limiting results to a folder path
+			Prefix: aws.String(prefix),
 
-	emptyHash := sha256.Sum256([]byte(""))
-	payloadHash := fmt.Sprintf("%x", emptyHash)
-	req.Header.Set("x-amz-content-sha256", payloadHash)
+			// If nil, S3 starts from the beginning. Otherwise it continues from the next page marker
+			ContinuationToken: continuationToken,
 
-	fmt.Println("Outgoing headers:")
-	for name, values := range req.Header {
-		for _, value := range values {
-			fmt.Printf("  %s: %s\n", name, value)
+			// Max number of objects returned in this single API call
+			MaxKeys: aws.Int32(maxKeys),
 		}
-	}
 
-	canonicalRequest, signedHeaders := buildCanonicalRequest(req, path, query, payloadHash)
-
-	fmt.Println("Signed headers:", signedHeaders)
-	fmt.Println("Canonical request:")
-	fmt.Println("-----BEGIN CANONICAL REQUEST-----")
-	fmt.Println(canonicalRequest)
-	fmt.Println("-----END CANONICAL REQUEST-----")
-
-	canonicalRequestHash := sha256.Sum256([]byte(canonicalRequest))
-	canonicalRequestHashHex := fmt.Sprintf("%x", canonicalRequestHash)
-
-	fmt.Println("Canonical request SHA256:")
-	fmt.Println(canonicalRequestHashHex)
-
-	dateStamp := amzDate[:8]
-	credentialScope := dateStamp + "/" + region + "/s3/aws4_request"
-
-	stringToSign := strings.Join([]string{
-		"AWS4-HMAC-SHA256",
-		amzDate,
-		credentialScope,
-		canonicalRequestHashHex,
-	}, "\n")
-
-	fmt.Println("Credential scope:")
-	fmt.Println(credentialScope)
-
-	fmt.Println("String to sign:")
-	fmt.Println("-----BEGIN STRING TO SIGN-----")
-	fmt.Println(stringToSign)
-	fmt.Println("-----END STRING TO SIGN-----")
-
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-	}
-
-	fmt.Println("Sending request...")
-	resp, err := client.Do(req)
-	if err != nil {
-		fmt.Println("HTTP request failed:", err)
-		return
-	}
-	defer resp.Body.Close()
-
-	fmt.Println("Status:", resp.Status)
-
-	fmt.Println("Response headers:")
-	for name, values := range resp.Header {
-		for _, value := range values {
-			fmt.Printf("  %s: %s\n", name, value)
+		// Call the S3 ListObjectsV2 API
+		resp, err := client.ListObjectsV2(ctx, input)
+		if err != nil {
+			log.Fatalf("list objects failed on page %d: %v", pageNumber, err)
 		}
+
+		// Show per-page information so you can understand how pagination behaves
+		fmt.Printf("Page %d\n", pageNumber)
+		fmt.Printf("  KeyCount: %d\n", aws.ToInt32(resp.KeyCount))
+		fmt.Printf("  MaxKeys: %d\n", maxKeys)
+		fmt.Printf("  IsTruncated: %v\n", aws.ToBool(resp.IsTruncated))
+
+		// Process the objects returned in this page
+		for _, obj := range resp.Contents {
+			totalObjects++
+			fmt.Printf("%s\t%d\n", aws.ToString(obj.Key), obj.Size)
+		}
+
+		// If IsTruncated is false, there are no more pages and we stop
+		if !aws.ToBool(resp.IsTruncated) {
+			break
+		}
+
+		// Otherwise, use the token returned by S3 to request the next page
+		continuationToken = resp.NextContinuationToken
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		fmt.Println("Failed to read response body:", err)
-		return
-	}
-
-	fmt.Println("Response body:")
-	fmt.Println(string(body))
-}
-
-func buildCanonicalRequest(req *http.Request, path, query, payloadHash string) (string, string) {
-	var headerNames []string
-	canonicalHeaders := make(map[string]string)
-
-	hostValue := req.URL.Host
-	headerNames = append(headerNames, "host")
-	canonicalHeaders["host"] = hostValue
-
-	for name, values := range req.Header {
-		lowerName := strings.ToLower(strings.TrimSpace(name))
-		value := strings.Join(values, ",")
-		value = strings.TrimSpace(value)
-
-		headerNames = append(headerNames, lowerName)
-		canonicalHeaders[lowerName] = value
-	}
-
-	sort.Strings(headerNames)
-
-	var canonicalHeadersText strings.Builder
-	for _, name := range headerNames {
-		canonicalHeadersText.WriteString(name)
-		canonicalHeadersText.WriteString(":")
-		canonicalHeadersText.WriteString(canonicalHeaders[name])
-		canonicalHeadersText.WriteString("\n")
-	}
-
-	signedHeaders := strings.Join(headerNames, ";")
-
-	canonicalRequest := strings.Join([]string{
-		req.Method,
-		path,
-		query,
-		canonicalHeadersText.String(),
-		signedHeaders,
-		payloadHash,
-	}, "\n")
-
-	return canonicalRequest, signedHeaders
+	fmt.Printf("\nDone. Total objects listed: %d\n", totalObjects)
 }
