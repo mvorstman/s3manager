@@ -7,7 +7,7 @@ import (
 	"log"
 )
 
-const version = "0.9"
+const version = "0.11"
 
 func main() {
 	action := flag.String("action", "list", "Action to perform: list | upload | upload-folder | download | delete")
@@ -19,6 +19,10 @@ func main() {
 	prefix := flag.String("prefix", "", "Optional prefix filter")
 	maxKeys := flag.Int("max-keys", 1000, "Max objects per request (pagination size)")
 
+	// Shared behavior flags
+	workers := flag.Int("workers", 4, "Number of parallel workers")
+	verbose := flag.Bool("verbose", false, "Show detailed per-file/per-object output instead of only summary")
+
 	// Shared object flags
 	objectKey := flag.String("key", "", "Object key in S3")
 
@@ -26,7 +30,6 @@ func main() {
 	filePath := flag.String("file", "", "Local file to upload")
 	folderPath := flag.String("folder", "", "Local folder to upload recursively")
 	keyPrefix := flag.String("key-prefix", "", "Optional S3 key prefix for folder uploads")
-	workers := flag.Int("workers", 4, "Number of parallel upload workers for folder upload")
 
 	// Download-specific flag
 	outputPath := flag.String("out", "", "Local output file path for download")
@@ -67,7 +70,7 @@ func main() {
 		if *folderPath == "" {
 			log.Fatal("for upload-folder, --folder is required")
 		}
-		uploadFolder(ctx, client, *bucket, *folderPath, *keyPrefix, *workers)
+		uploadFolder(ctx, client, *bucket, *folderPath, *keyPrefix, *workers, *verbose)
 
 	case "download":
 		if *objectKey == "" || *outputPath == "" {
@@ -76,7 +79,7 @@ func main() {
 		downloadFile(ctx, client, *bucket, *objectKey, *outputPath)
 
 	case "delete":
-		deleteObjectsByPrefix(ctx, client, *bucket, *prefix, int32(*maxKeys), *dryRun)
+		deleteObjectsByPrefix(ctx, client, *bucket, *prefix, int32(*maxKeys), *dryRun, *workers, *verbose)
 
 	default:
 		log.Fatalf("unknown action: %s", *action)

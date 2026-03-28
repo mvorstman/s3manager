@@ -22,7 +22,7 @@ type uploadJob struct {
 	size      int64
 }
 
-func uploadFolder(ctx context.Context, client *s3.Client, bucket, folderPath, keyPrefix string, workers int) {
+func uploadFolder(ctx context.Context, client *s3.Client, bucket, folderPath, keyPrefix string, workers int, verbose bool) {
 	startTime := time.Now()
 
 	fmt.Println("Folder upload starting...")
@@ -30,6 +30,7 @@ func uploadFolder(ctx context.Context, client *s3.Client, bucket, folderPath, ke
 	fmt.Printf("  Bucket: %s\n", bucket)
 	fmt.Printf("  Key prefix: %s\n", keyPrefix)
 	fmt.Printf("  Workers: %d\n", workers)
+	fmt.Printf("  Verbose: %v\n", verbose)
 
 	rootPath := filepath.Clean(folderPath)
 
@@ -92,7 +93,7 @@ func uploadFolder(ctx context.Context, client *s3.Client, bucket, folderPath, ke
 	var uploadedFiles int64
 	var uploadedBytes int64
 
-	progressInterval := int64(100) // update every 100 files
+	progressInterval := int64(100)
 
 	// ---- Workers ----
 	for i := 1; i <= workers; i++ {
@@ -102,7 +103,6 @@ func uploadFolder(ctx context.Context, client *s3.Client, bucket, folderPath, ke
 			defer wg.Done()
 
 			for job := range jobCh {
-
 				err := uploadSingleFile(ctx, client, bucket, job)
 				if err != nil {
 					select {
@@ -115,15 +115,18 @@ func uploadFolder(ctx context.Context, client *s3.Client, bucket, folderPath, ke
 				newCount := atomic.AddInt64(&uploadedFiles, 1)
 				newBytes := atomic.AddInt64(&uploadedBytes, job.size)
 
-				// ---- Progress reporting ----
-				if newCount%progressInterval == 0 || newCount == totalJobs {
-					percent := float64(newCount) / float64(totalJobs) * 100
-					fmt.Printf("[progress] %d/%d files (%.1f%%) - %.2f MB\n",
-						newCount,
-						totalJobs,
-						percent,
-						float64(newBytes)/(1024*1024),
-					)
+				if verbose {
+					fmt.Printf("[worker %d] Uploaded: %s -> %s\n", workerID, job.localPath, job.objectKey)
+				} else {
+					if newCount%progressInterval == 0 || newCount == totalJobs {
+						percent := float64(newCount) / float64(totalJobs) * 100
+						fmt.Printf("[progress] %d/%d files (%.1f%%) - %.2f MB\n",
+							newCount,
+							totalJobs,
+							percent,
+							float64(newBytes)/(1024*1024),
+						)
+					}
 				}
 			}
 		}(i)
@@ -153,7 +156,11 @@ func uploadFolder(ctx context.Context, client *s3.Client, bucket, folderPath, ke
 	// ---- Final summary ----
 	duration := time.Since(startTime)
 	mb := float64(uploadedBytes) / (1024 * 1024)
-	speed := mb / duration.Seconds()
+
+	var speed float64
+	if duration.Seconds() > 0 {
+		speed = mb / duration.Seconds()
+	}
 
 	fmt.Println("\nUpload completed.")
 	fmt.Printf("  Files: %d\n", uploadedFiles)
