@@ -7,10 +7,10 @@ import (
 	"log"
 )
 
-const version = "0.13"
+const version = "0.14"
 
 func main() {
-	action := flag.String("action", "list", "Action to perform: list | upload | upload-folder | download | head | delete")
+	action := flag.String("action", "list", "Action to perform: list | upload | upload-folder | download | download-prefix | head | delete")
 	endpoint := flag.String("endpoint", "", "S3 endpoint, for example https://s3.example.local")
 	region := flag.String("region", "us-east-1", "AWS region")
 	accessKey := flag.String("access-key", "", "S3 access key")
@@ -35,8 +35,9 @@ func main() {
 	folderPath := flag.String("folder", "", "Local folder to upload recursively")
 	keyPrefix := flag.String("key-prefix", "", "Optional S3 key prefix for folder uploads")
 
-	// Download-specific flag
-	outputPath := flag.String("out", "", "Local output file path for download")
+	// Download-specific flags
+	outputPath := flag.String("out", "", "Local output file path for single-object download")
+	outputDir := flag.String("out-dir", "", "Local output directory for prefix download")
 
 	// Delete-specific flag
 	dryRun := flag.Bool("dry-run", true, "If true, only show what would be deleted")
@@ -97,6 +98,12 @@ func main() {
 			log.Fatal("for download, both --key and --out are required")
 		}
 		downloadFile(ctx, client, *bucket, *objectKey, *outputPath)
+
+	case "download-prefix":
+		if *prefix == "" || *outputDir == "" {
+			log.Fatal("for download-prefix, both --prefix and --out-dir are required")
+		}
+		downloadPrefix(ctx, client, *bucket, *prefix, *outputDir, int32(*maxKeys), *workers, *verbose)
 
 	case "head":
 		if *objectKey == "" {
