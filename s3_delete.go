@@ -32,16 +32,66 @@ func deleteObjectsByPrefix(ctx context.Context, client *s3.Client, bucket, prefi
 	fmt.Printf("  Workers: %d\n", workers)
 	fmt.Printf("  Verbose: %v\n", verbose)
 
-	// ---- First scan: build delete batches ----
-	var continuationToken *string
-	var jobs []deleteBatchJob
-
-	totalMatched := int64(0)
-	pageNumber := 0
+	var totalMatched int64
+	var totalDeleted int64
+	var batchesQueued int64
+	var batchesCompleted int64
 
 	progressInterval := int64(100)
 
+	// Channel = wachtrij voor delete batches
+	jobCh := make(chan deleteBatchJob, workers*2)
+
+	// Error channel: eerste fout wint
+	errCh := make(chan error, 1)
+
+	// ---- Start delete workers ----
+	var workerWG sync.WaitGroup
+
+	if !dryRun {
+		for workerID := 1; workerID <= workers; workerID++ {
+			workerWG.Add(1)
+
+			go func(id int) {
+				defer workerWG.Done()
+
+				for job := range jobCh {
+					deletedCount, err := deleteBatch(ctx, client, bucket, job.objects, verbose, id)
+					if err != nil {
+						select {
+						case errCh <- err:
+						default:
+						}
+						return
+					}
+
+					newDeleted := atomic.AddInt64(&totalDeleted, int64(deletedCount))
+					newCompleted := atomic.AddInt64(&batchesCompleted, 1)
+
+					if !verbose {
+						fmt.Printf("[progress] batches %d - deleted %d objects\n",
+							newCompleted,
+							newDeleted,
+						)
+					}
+				}
+			}(workerID)
+		}
+	}
+
+	// ---- Producer: scan objecten en stuur batches direct naar workers ----
+	var continuationToken *string
+	pageNumber := 0
+
+producerLoop:
 	for {
+		// Stop vroeg als een worker al een fout heeft gemeld
+		select {
+		case err := <-errCh:
+			log.Fatalf("delete failed: %v", err)
+		default:
+		}
+
 		pageNumber++
 
 		input := &s3.ListObjectsV2Input{
@@ -66,13 +116,13 @@ func deleteObjectsByPrefix(ctx context.Context, client *s3.Client, bucket, prefi
 
 		for _, obj := range resp.Contents {
 			key := aws.ToString(obj.Key)
-			totalMatched++
+			newMatched := atomic.AddInt64(&totalMatched, 1)
 
 			if dryRun {
 				if verbose {
 					fmt.Printf("DRY-RUN would delete: %s\t%d\n", key, obj.Size)
-				} else if totalMatched%progressInterval == 0 {
-					fmt.Printf("[scan] matched %d objects\n", totalMatched)
+				} else if newMatched%progressInterval == 0 {
+					fmt.Printf("[scan] matched %d objects\n", newMatched)
 				}
 				continue
 			}
@@ -85,90 +135,53 @@ func deleteObjectsByPrefix(ctx context.Context, client *s3.Client, bucket, prefi
 				Key: aws.String(key),
 			})
 
-			// Safety: DeleteObjects supports max 1000 keys per call
+			// DeleteObjects ondersteunt maximaal 1000 keys per batch
 			if len(batch) == 1000 {
-				jobs = append(jobs, deleteBatchJob{objects: batch})
+				select {
+				case err := <-errCh:
+					log.Fatalf("delete failed: %v", err)
+				case jobCh <- deleteBatchJob{objects: batch}:
+					atomic.AddInt64(&batchesQueued, 1)
+				}
 				batch = nil
 			}
 		}
 
+		// Restbatch ook versturen
 		if len(batch) > 0 && !dryRun {
-			jobs = append(jobs, deleteBatchJob{objects: batch})
+			select {
+			case err := <-errCh:
+				log.Fatalf("delete failed: %v", err)
+			case jobCh <- deleteBatchJob{objects: batch}:
+				atomic.AddInt64(&batchesQueued, 1)
+			}
 		}
 
 		if !aws.ToBool(resp.IsTruncated) {
-			break
+			break producerLoop
 		}
 
 		continuationToken = resp.NextContinuationToken
 	}
 
-	fmt.Printf("\nScan complete.\n")
-	fmt.Printf("  Total matched: %d\n", totalMatched)
+	// Producer is klaar; geen nieuwe jobs meer
+	close(jobCh)
 
+	// Dry-run heeft geen workers draaien
 	if dryRun {
+		duration := time.Since(startTime)
+
+		fmt.Printf("\nScan complete.\n")
+		fmt.Printf("  Total matched: %d\n", totalMatched)
 		fmt.Printf("  Total deleted: 0 (dry-run)\n")
-		fmt.Printf("  Duration: %.2fs\n", time.Since(startTime).Seconds())
+		fmt.Printf("  Duration: %.2fs\n", duration.Seconds())
 		return
 	}
 
-	fmt.Printf("  Delete batches queued: %d\n", len(jobs))
-
-	if len(jobs) == 0 {
-		fmt.Printf("  Total deleted: 0\n")
-		fmt.Printf("  Duration: %.2fs\n", time.Since(startTime).Seconds())
-		return
-	}
-
-	// ---- Parallel delete workers ----
-	jobCh := make(chan deleteBatchJob)
-	errCh := make(chan error, 1)
-
-	var wg sync.WaitGroup
-	var totalDeleted int64
-	var batchesCompleted int64
-
-	for workerID := 1; workerID <= workers; workerID++ {
-		wg.Add(1)
-
-		go func(id int) {
-			defer wg.Done()
-
-			for job := range jobCh {
-				deletedCount, err := deleteBatch(ctx, client, bucket, job.objects, verbose, id)
-				if err != nil {
-					select {
-					case errCh <- err:
-					default:
-					}
-					return
-				}
-
-				newDeleted := atomic.AddInt64(&totalDeleted, int64(deletedCount))
-				newBatches := atomic.AddInt64(&batchesCompleted, 1)
-
-				if !verbose {
-					fmt.Printf("[progress] batches %d/%d - deleted %d/%d objects\n",
-						newBatches,
-						len(jobs),
-						newDeleted,
-						totalMatched,
-					)
-				}
-			}
-		}(workerID)
-	}
-
-	go func() {
-		defer close(jobCh)
-		for _, job := range jobs {
-			jobCh <- job
-		}
-	}()
-
+	// Wacht tot workers klaar zijn
 	doneCh := make(chan struct{})
 	go func() {
-		wg.Wait()
+		workerWG.Wait()
 		close(doneCh)
 	}()
 
@@ -182,6 +195,8 @@ func deleteObjectsByPrefix(ctx context.Context, client *s3.Client, bucket, prefi
 
 	fmt.Printf("\nDelete complete.\n")
 	fmt.Printf("  Total matched: %d\n", totalMatched)
+	fmt.Printf("  Batches queued: %d\n", batchesQueued)
+	fmt.Printf("  Batches completed: %d\n", batchesCompleted)
 	fmt.Printf("  Total deleted: %d\n", totalDeleted)
 	fmt.Printf("  Duration: %.2fs\n", duration.Seconds())
 

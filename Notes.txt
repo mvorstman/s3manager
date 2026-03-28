@@ -1,0 +1,113 @@
+AWS_ACCESS_KEY_ID: J8LQFJKXA6DJZ31JAVHS 
+AWS_SECRET_ACCESS_KEY: jpEVTH/ZmY4IGJHDkcowPR26WSf7v6Fo73Lwh5CE
+bucket: temp-8155
+region: us-east-1
+endpoint: https://s3-nl03.cloud.dm-p.com
+
+cd C:\dev\s3manager
+dir
+Get-Content .\main.go
+go run .
+
+mkdir C:\dev\s3manager -Force
+cd C:\dev\s3manager
+go mod init s3manager
+
+cd C:\dev\s3manager
+gofmt -w .\main.go
+go run .
+
+
+go run . --endpoint https://s3-nl03.cloud.dm-p.com --region us-east-1 --access-key J8LQFJKXA6DJZ31JAVHS --secret-key jpEVTH/ZmY4IGJHDkcowPR26WSf7v6Fo73Lwh5CE --bucket temp-8155
+
+
+List
+--------------------------------------------
+go run . `
+--action list `
+--endpoint https://s3-nl03.cloud.dm-p.com `
+--region us-east-1 `
+--access-key J8LQFJKXA6DJZ31JAVHS `
+--secret-key jpEVTH/ZmY4IGJHDkcowPR26WSf7v6Fo73Lwh5CE `
+--bucket temp-8155 `
+--max-keys 5
+
+
+Upload
+---------------------------------------------
+go run . `
+--action upload `
+--endpoint https://s3-nl03.cloud.dm-p.com `
+--region us-east-1 `
+--access-key J8LQFJKXA6DJZ31JAVHS `
+--secret-key jpEVTH/ZmY4IGJHDkcowPR26WSf7v6Fo73Lwh5CE `
+--bucket temp-8155 `
+--file C:\test\test.txt `
+--key test.txt
+
+Upload Folder
+------------------------------------------
+go run . `
+--action upload-folder `
+--endpoint https://s3-nl03.cloud.dm-p.com `
+--region us-east-1 `
+--access-key J8LQFJKXA6DJZ31JAVHS `
+--secret-key jpEVTH/ZmY4IGJHDkcowPR26WSf7v6Fo73Lwh5CE `
+--bucket temp-8155 `
+--folder C:\temp\s3-test-data `
+--prefix TF/
+--workers 8
+
+
+Download
+-------------------------------------------
+go run . `
+--action download `
+--endpoint https://s3-nl03.cloud.dm-p.com `
+--region us-east-1 `
+--access-key J8LQFJKXA6DJZ31JAVHS `
+--secret-key jpEVTH/ZmY4IGJHDkcowPR26WSf7v6Fo73Lwh5CE `
+--bucket temp-8155 `
+--key test.txt `
+--out C:\temp\downloaded-test.txt
+
+
+Delete
+------------------------------------------
+go run . `
+--action delete `
+--endpoint https://s3-nl03.cloud.dm-p.com `
+--region us-east-1 `
+--access-key J8LQFJKXA6DJZ31JAVHS `
+--secret-key jpEVTH/ZmY4IGJHDkcowPR26WSf7v6Fo73Lwh5CE `
+--bucket temp-8155 `
+--prefix test `
+--max-keys 5 `
+--dry-run=true
+
+
+go run . `
+>> --action delete `
+>> --endpoint https://s3-nl03.cloud.dm-p.com `
+>> --region us-east-1 `
+>> --access-key J8LQFJKXA6DJZ31JAVHS `
+>> --secret-key jpEVTH/ZmY4IGJHDkcowPR26WSf7v6Fo73Lwh5CE `
+>> --bucket temp-8155 `
+>> --prefix TF `
+>> --max-keys 10 `
+>> --dry-run=false
+
+go run . `
+--action delete `
+--endpoint https://s3-nl03.cloud.dm-p.com `
+--region us-east-1 `
+--access-key YOURKEY `
+--secret-key YOURSECRET `
+--bucket temp-8155 `
+--prefix TF/ `
+--max-keys 1000 `
+--dry-run=false `
+--workers 4 `
+--verbose=true
+
+

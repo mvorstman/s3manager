@@ -7,7 +7,7 @@ import (
 	"log"
 )
 
-const version = "0.11"
+const version = "0.12"
 
 func main() {
 	action := flag.String("action", "list", "Action to perform: list | upload | upload-folder | download | delete")
@@ -22,6 +22,10 @@ func main() {
 	// Shared behavior flags
 	workers := flag.Int("workers", 4, "Number of parallel workers")
 	verbose := flag.Bool("verbose", false, "Show detailed per-file/per-object output instead of only summary")
+
+	// Retry / resilience flags
+	maxAttempts := flag.Int("max-attempts", 5, "Maximum retry attempts for AWS SDK operations")
+	retryMaxBackoffMs := flag.Int("retry-max-backoff-ms", 5000, "Maximum retry backoff in milliseconds")
 
 	// Shared object flags
 	objectKey := flag.String("key", "", "Object key in S3")
@@ -49,9 +53,25 @@ func main() {
 		log.Fatal("--workers must be at least 1")
 	}
 
+	if *maxAttempts < 1 {
+		log.Fatal("--max-attempts must be at least 1")
+	}
+
+	if *retryMaxBackoffMs < 0 {
+		log.Fatal("--retry-max-backoff-ms must be 0 or higher")
+	}
+
 	ctx := context.Background()
 
-	client, err := newS3Client(ctx, *endpoint, *region, *accessKey, *secretKey)
+	client, err := newS3Client(
+		ctx,
+		*endpoint,
+		*region,
+		*accessKey,
+		*secretKey,
+		*maxAttempts,
+		*retryMaxBackoffMs,
+	)
 	if err != nil {
 		log.Fatalf("failed to create S3 client: %v", err)
 	}
