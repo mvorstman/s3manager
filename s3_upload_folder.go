@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -22,6 +23,8 @@ type uploadJob struct {
 }
 
 func uploadFolder(ctx context.Context, client *s3.Client, bucket, folderPath, keyPrefix string, workers int) {
+	startTime := time.Now()
+
 	fmt.Println("Folder upload starting...")
 	fmt.Printf("  Local folder: %s\n", folderPath)
 	fmt.Printf("  Bucket: %s\n", bucket)
@@ -35,7 +38,7 @@ func uploadFolder(ctx context.Context, client *s3.Client, bucket, folderPath, ke
 		normalizedPrefix += "/"
 	}
 
-	// First collect all upload jobs
+	// ---- Collect jobs ----
 	var jobs []uploadJob
 
 	err := filepath.WalkDir(rootPath, func(path string, d fs.DirEntry, walkErr error) error {
@@ -49,33 +52,35 @@ func uploadFolder(ctx context.Context, client *s3.Client, bucket, folderPath, ke
 
 		info, err := d.Info()
 		if err != nil {
-			return fmt.Errorf("failed to read info for %s: %w", path, err)
+			return err
 		}
 
-		relativePath, err := filepath.Rel(rootPath, path)
+		rel, err := filepath.Rel(rootPath, path)
 		if err != nil {
-			return fmt.Errorf("failed to compute relative path for %s: %w", path, err)
+			return err
 		}
 
-		objectKey := strings.ReplaceAll(relativePath, "\\", "/")
-		objectKey = normalizedPrefix + objectKey
+		key := strings.ReplaceAll(rel, "\\", "/")
+		key = normalizedPrefix + key
 
 		jobs = append(jobs, uploadJob{
 			localPath: path,
-			objectKey: objectKey,
+			objectKey: key,
 			size:      info.Size(),
 		})
 
 		return nil
 	})
 	if err != nil {
-		log.Fatalf("failed to scan folder: %v", err)
+		log.Fatalf("scan failed: %v", err)
 	}
 
-	fmt.Printf("  Files discovered: %d\n", len(jobs))
+	totalJobs := int64(len(jobs))
 
-	if len(jobs) == 0 {
-		fmt.Println("No files found. Nothing to upload.")
+	fmt.Printf("  Files discovered: %d\n", totalJobs)
+
+	if totalJobs == 0 {
+		fmt.Println("Nothing to upload.")
 		return
 	}
 
@@ -83,75 +88,84 @@ func uploadFolder(ctx context.Context, client *s3.Client, bucket, folderPath, ke
 	errCh := make(chan error, 1)
 
 	var wg sync.WaitGroup
-	var totalFilesUploaded int64
-	var totalBytesUploaded int64
 
-	// Start worker goroutines
-	for workerID := 1; workerID <= workers; workerID++ {
+	var uploadedFiles int64
+	var uploadedBytes int64
+
+	progressInterval := int64(100) // update every 100 files
+
+	// ---- Workers ----
+	for i := 1; i <= workers; i++ {
 		wg.Add(1)
 
-		go func(id int) {
+		go func(workerID int) {
 			defer wg.Done()
 
 			for job := range jobCh {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
 
 				err := uploadSingleFile(ctx, client, bucket, job)
 				if err != nil {
 					select {
-					case errCh <- fmt.Errorf("worker %d failed on %s: %w", id, job.localPath, err):
+					case errCh <- err:
 					default:
 					}
 					return
 				}
 
-				atomic.AddInt64(&totalFilesUploaded, 1)
-				atomic.AddInt64(&totalBytesUploaded, job.size)
+				newCount := atomic.AddInt64(&uploadedFiles, 1)
+				newBytes := atomic.AddInt64(&uploadedBytes, job.size)
 
-				fmt.Printf("[worker %d] Uploaded: %s -> %s\n", id, job.localPath, job.objectKey)
+				// ---- Progress reporting ----
+				if newCount%progressInterval == 0 || newCount == totalJobs {
+					percent := float64(newCount) / float64(totalJobs) * 100
+					fmt.Printf("[progress] %d/%d files (%.1f%%) - %.2f MB\n",
+						newCount,
+						totalJobs,
+						percent,
+						float64(newBytes)/(1024*1024),
+					)
+				}
 			}
-		}(workerID)
+		}(i)
 	}
 
-	// Feed jobs to workers
+	// ---- Feed jobs ----
 	go func() {
 		defer close(jobCh)
-
 		for _, job := range jobs {
-			select {
-			case <-ctx.Done():
-				return
-			case jobCh <- job:
-			}
+			jobCh <- job
 		}
 	}()
 
-	// Wait for workers to finish
-	doneCh := make(chan struct{})
+	// ---- Wait ----
+	done := make(chan struct{})
 	go func() {
 		wg.Wait()
-		close(doneCh)
+		close(done)
 	}()
 
 	select {
 	case err := <-errCh:
-		log.Fatalf("folder upload failed: %v", err)
-	case <-doneCh:
+		log.Fatalf("upload failed: %v", err)
+	case <-done:
 	}
 
-	fmt.Println("Folder upload completed successfully.")
-	fmt.Printf("  Total files uploaded: %d\n", totalFilesUploaded)
-	fmt.Printf("  Total bytes uploaded: %d\n", totalBytesUploaded)
+	// ---- Final summary ----
+	duration := time.Since(startTime)
+	mb := float64(uploadedBytes) / (1024 * 1024)
+	speed := mb / duration.Seconds()
+
+	fmt.Println("\nUpload completed.")
+	fmt.Printf("  Files: %d\n", uploadedFiles)
+	fmt.Printf("  Size: %.2f MB\n", mb)
+	fmt.Printf("  Duration: %.2fs\n", duration.Seconds())
+	fmt.Printf("  Throughput: %.2f MB/s\n", speed)
 }
 
 func uploadSingleFile(ctx context.Context, client *s3.Client, bucket string, job uploadJob) error {
 	file, err := os.Open(job.localPath)
 	if err != nil {
-		return fmt.Errorf("failed to open file: %w", err)
+		return err
 	}
 	defer file.Close()
 
@@ -160,9 +174,6 @@ func uploadSingleFile(ctx context.Context, client *s3.Client, bucket string, job
 		Key:    aws.String(job.objectKey),
 		Body:   file,
 	})
-	if err != nil {
-		return fmt.Errorf("upload failed: %w", err)
-	}
 
-	return nil
+	return err
 }
