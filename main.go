@@ -7,10 +7,10 @@ import (
 	"log"
 )
 
-const version = "0.12"
+const version = "0.13"
 
 func main() {
-	action := flag.String("action", "list", "Action to perform: list | upload | upload-folder | download | delete")
+	action := flag.String("action", "list", "Action to perform: list | upload | upload-folder | download | head | delete")
 	endpoint := flag.String("endpoint", "", "S3 endpoint, for example https://s3.example.local")
 	region := flag.String("region", "us-east-1", "AWS region")
 	accessKey := flag.String("access-key", "", "S3 access key")
@@ -97,6 +97,12 @@ func main() {
 			log.Fatal("for download, both --key and --out are required")
 		}
 		downloadFile(ctx, client, *bucket, *objectKey, *outputPath)
+
+	case "head":
+		if *objectKey == "" {
+			log.Fatal("for head, --key is required")
+		}
+		headObject(ctx, client, *bucket, *objectKey)
 
 	case "delete":
 		deleteObjectsByPrefix(ctx, client, *bucket, *prefix, int32(*maxKeys), *dryRun, *workers, *verbose)
