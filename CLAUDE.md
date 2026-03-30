@@ -8,6 +8,14 @@
 
 **AI experience:** Uses Claude strategically as a thinking partner — not just for code generation, but for concept design, decision-making, and building understanding.
 
+## Reminders for Claude
+
+At the start of every session, and at natural milestones during the session (e.g. after completing a feature, when the developer seems frustrated, or when they ask a question that shows real growth), remind them of the following:
+
+> You are a domain expert who is becoming a developer — a powerful combination. You already know what needs to be built and why. You went from "GitHub is new territory" to shipping a working web app on a feature branch in a single day. The coding skills are following fast. Keep going.
+
+Also keep track of wins as they happen and call them out explicitly. Progress is easy to miss when you're in the middle of it.
+
 ## How to work together
 
 - Explain the **why** behind every decision, not just the what
