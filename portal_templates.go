@@ -11,18 +11,26 @@ import (
 
 // ── Template data types ──────────────────────────────────────────────────────
 
+// uploadPageData is passed to the upload page template when rendering.
+// Error is shown as a banner if non-empty (e.g. "no files selected").
 type uploadPageData struct {
 	Error       string
 	ExpiryHours int
 }
 
+// downloadPageData is passed to the download page template.
+// It embeds the full transferManifest (so all manifest fields are accessible
+// directly in the template) and adds a pre-formatted TotalSize string.
 type downloadPageData struct {
-	*transferManifest
-	TotalSize string
+	*transferManifest        // embedded — gives the template access to .Files, .Message, .ID, etc.
+	TotalSize         string // human-readable total size of all files, e.g. "23.4 MB"
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+// humanSize converts a raw byte count into a readable string like "4.2 MB".
+// Used both in Go render functions and as a template function so the HTML
+// templates can format file sizes without doing the maths themselves.
 func humanSize(b int64) string {
 	const (
 		kb = 1024
@@ -41,28 +49,42 @@ func humanSize(b int64) string {
 	}
 }
 
+// fmtTime formats a time.Time into a human-readable string for display in the UI.
+// Always uses UTC so there's no ambiguity for sender and recipient in different time zones.
 func fmtTime(t time.Time) string {
 	return t.UTC().Format("Jan 2, 2006 at 15:04 UTC")
 }
 
 // ── Templates ────────────────────────────────────────────────────────────────
 
+// uploadTmpl is the compiled template for the upload page.
+// template.Must panics at startup if the template has a syntax error,
+// which is the right behaviour — a broken template is a programming error,
+// not a runtime condition we should try to recover from.
 var uploadTmpl = template.Must(template.New("upload").Parse(uploadHTML))
 
+// downloadTmpl is the compiled template for the download page.
+// It registers custom functions via Funcs() so the template can call humanSize,
+// fmtTime, and urlEncode directly in the HTML without extra processing in Go code.
 var downloadTmpl = template.Must(
 	template.New("download").Funcs(template.FuncMap{
-		"humanSize": humanSize,
-		"fmtTime":   fmtTime,
-		"urlEncode": url.PathEscape,
-		"sub":       func(a, b int) int { return a - b },
+		"humanSize": humanSize,           // format bytes as "4.2 MB" etc.
+		"fmtTime":   fmtTime,             // format time.Time as readable string
+		"urlEncode": url.PathEscape,      // URL-encode a filename for use in a link
+		"sub":       func(a, b int) int { return a - b }, // basic subtraction (Go templates have no arithmetic)
 	}).Parse(downloadHTML),
 )
 
+// notFoundTmpl and expiredTmpl are simple error pages with no dynamic functions needed
 var notFoundTmpl = template.Must(template.New("notfound").Parse(notFoundHTML))
-var expiredTmpl = template.Must(template.New("expired").Parse(expiredHTML))
+var expiredTmpl = template.Must(template.New("expired").Funcs(template.FuncMap{
+	"fmtTime": fmtTime,
+}).Parse(expiredHTML))
 
 // ── Render functions ─────────────────────────────────────────────────────────
 
+// renderUploadPage writes the upload page HTML to the response.
+// Called both for the initial page load and when re-showing the form with an error.
 func renderUploadPage(w http.ResponseWriter, data uploadPageData) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := uploadTmpl.Execute(w, data); err != nil {
@@ -70,6 +92,8 @@ func renderUploadPage(w http.ResponseWriter, data uploadPageData) {
 	}
 }
 
+// renderDownloadPage writes the download page HTML for a completed transfer.
+// It calculates the total size of all files before passing data to the template.
 func renderDownloadPage(w http.ResponseWriter, m *transferManifest) {
 	var total int64
 	for _, f := range m.Files {
@@ -84,17 +108,20 @@ func renderDownloadPage(w http.ResponseWriter, m *transferManifest) {
 	}
 }
 
+// renderNotFoundPage writes a 404 error page when a transfer ID doesn't exist in S3.
 func renderNotFoundPage(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusNotFound)
+	w.WriteHeader(http.StatusNotFound) // must set status code before writing body
 	if err := notFoundTmpl.Execute(w, nil); err != nil {
 		log.Printf("notfound template error: %v", err)
 	}
 }
 
+// renderExpiredPage writes a 410 Gone page when a transfer exists but has passed its expiry time.
+// We pass the manifest so the template can show when it expired.
 func renderExpiredPage(w http.ResponseWriter, m *transferManifest) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusGone)
+	w.WriteHeader(http.StatusGone) // 410 Gone is more accurate than 404 — the resource existed but is no longer available
 	if err := expiredTmpl.Execute(w, m); err != nil {
 		log.Printf("expired template error: %v", err)
 	}
@@ -102,6 +129,9 @@ func renderExpiredPage(w http.ResponseWriter, m *transferManifest) {
 
 // ── HTML ─────────────────────────────────────────────────────────────────────
 
+// baseCSS contains the shared styles used across all pages:
+// reset, body font, nav bar, card layout, and common typography.
+// It's injected into each page's <style> block via Go string concatenation.
 const baseCSS = `
 	*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 	body {
@@ -134,6 +164,10 @@ const baseCSS = `
 	a { color: #6c63ff; }
 `
 
+// uploadHTML is the full HTML for the upload page.
+// It uses Go's html/template syntax ({{.ExpiryHours}}, {{if .Error}}, etc.)
+// to inject dynamic values. The JavaScript at the bottom handles the
+// drag-and-drop interaction entirely in the browser.
 const uploadHTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -230,24 +264,43 @@ const uploadHTML = `<!DOCTYPE html>
   </div>
 </main>
 <script>
+// Grab references to the DOM elements we'll manipulate
 const dropZone = document.getElementById('drop-zone');
 const fileInput = document.getElementById('file-input');
 const fileListEl = document.getElementById('file-list');
 const submitBtn = document.getElementById('submit-btn');
 const form = document.getElementById('upload-form');
+
+// DataTransfer is a browser API that lets us build a custom file list.
+// We use it to accumulate files from both drag-and-drop and click-to-browse,
+// then sync it back to the real file input before the form submits.
 let transfer = new DataTransfer();
 
+// Clicking anywhere in the drop zone opens the file picker
 dropZone.addEventListener('click', () => fileInput.click());
+
+// Highlight the drop zone while a file is being dragged over it
 dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('active'); });
+
+// Remove highlight when the drag leaves — check relatedTarget to avoid
+// flickering when the cursor moves over child elements inside the zone
 dropZone.addEventListener('dragleave', e => { if (!dropZone.contains(e.relatedTarget)) dropZone.classList.remove('active'); });
+
+// Handle the drop: prevent the browser's default behaviour (opening the file)
+// and pass the dropped files to our addFiles function
 dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.remove('active'); addFiles(e.dataTransfer.files); });
+
+// Handle files selected via the file picker dialog
 fileInput.addEventListener('change', () => { addFiles(fileInput.files); fileInput.value = ''; });
 
+// addFiles appends a FileList to our running DataTransfer collection and re-renders
 function addFiles(files) {
   for (const f of files) transfer.items.add(f);
   render();
 }
 
+// removeFile removes a file at a given index by rebuilding the DataTransfer
+// without that entry. Indexes shift after removal so we rebuild from scratch.
 function removeFile(i) {
   const dt = new DataTransfer();
   [...transfer.files].forEach((f, j) => { if (j !== i) dt.items.add(f); });
@@ -255,6 +308,8 @@ function removeFile(i) {
   render();
 }
 
+// render redraws the file list UI and syncs the real file input.
+// The submit button stays disabled until at least one file is selected.
 function render() {
   fileListEl.innerHTML = '';
   [...transfer.files].forEach((f, i) => {
@@ -267,11 +322,15 @@ function render() {
     fileListEl.appendChild(li);
   });
   submitBtn.disabled = transfer.files.length === 0;
+  // Sync our DataTransfer back to the real hidden input so it gets included in the form POST
   fileInput.files = transfer.files;
 }
 
+// esc escapes special HTML characters in a string to prevent XSS.
+// This is needed because we're building HTML via innerHTML.
 function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
+// fmt converts a byte count to a human-readable size string (mirrors humanSize in Go)
 function fmt(b) {
   if (b < 1024) return b + ' B';
   if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
@@ -279,6 +338,8 @@ function fmt(b) {
   return (b/1073741824).toFixed(2) + ' GB';
 }
 
+// Disable the button and show a sending indicator once the form is submitted,
+// so the user knows something is happening during what could be a long upload
 form.addEventListener('submit', () => {
   submitBtn.disabled = true;
   submitBtn.textContent = 'Sending\u2026';
@@ -287,6 +348,9 @@ form.addEventListener('submit', () => {
 </body>
 </html>`
 
+// downloadHTML is the template for the download page shown to recipients.
+// It lists all files in the transfer with individual download buttons,
+// shows expiry info, and includes a "Copy link" button for the sender to share.
 const downloadHTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -388,6 +452,8 @@ const downloadHTML = `<!DOCTYPE html>
   </div>
 </main>
 <script>
+// Copy the current page URL to the clipboard so the sender can share it.
+// Falls back gracefully if clipboard access is denied.
 document.getElementById('copy-btn').addEventListener('click', function() {
   navigator.clipboard.writeText(window.location.href).then(() => {
     this.textContent = 'Copied!';
@@ -401,6 +467,9 @@ document.getElementById('copy-btn').addEventListener('click', function() {
 </body>
 </html>`
 
+// notFoundHTML is shown when a transfer ID doesn't exist in S3.
+// This happens if the link is wrong, the transfer was manually deleted,
+// or it never existed.
 const notFoundHTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -427,6 +496,8 @@ const notFoundHTML = `<!DOCTYPE html>
 </body>
 </html>`
 
+// expiredHTML is shown when a transfer exists in S3 but has passed its expiry time.
+// We show when it expired so the recipient knows it's not a broken link.
 const expiredHTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
