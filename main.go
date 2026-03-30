@@ -10,7 +10,7 @@ import (
 const version = "0.14"
 
 func main() {
-	action := flag.String("action", "list", "Action to perform: list | upload | upload-folder | download | download-prefix | head | delete")
+	action := flag.String("action", "list", "Action to perform: list | upload | upload-folder | download | download-prefix | head | delete | serve")
 	endpoint := flag.String("endpoint", "", "S3 endpoint, for example https://s3.example.local")
 	region := flag.String("region", "us-east-1", "AWS region")
 	accessKey := flag.String("access-key", "", "S3 access key")
@@ -41,6 +41,12 @@ func main() {
 
 	// Delete-specific flag
 	dryRun := flag.Bool("dry-run", true, "If true, only show what would be deleted")
+
+	// Transfer Portal (serve) flags
+	port := flag.Int("port", 8080, "HTTP port for Transfer Portal server")
+	transferPrefix := flag.String("transfer-prefix", "transfers/", "S3 key prefix for portal transfers")
+	expiryHours := flag.Int("expiry-hours", 72, "Hours until a transfer link expires")
+	maxUploadMB := flag.Int64("max-upload-mb", 2048, "Maximum total upload size in MB")
 
 	flag.Parse()
 
@@ -113,6 +119,15 @@ func main() {
 
 	case "delete":
 		deleteObjectsByPrefix(ctx, client, *bucket, *prefix, int32(*maxKeys), *dryRun, *workers, *verbose)
+
+	case "serve":
+		startPortal(ctx, portalConfig{
+			client:        client,
+			bucket:        *bucket,
+			prefix:        *transferPrefix,
+			expiryHours:   *expiryHours,
+			maxUploadSize: *maxUploadMB << 20,
+		}, *port)
 
 	default:
 		log.Fatalf("unknown action: %s", *action)
