@@ -23,6 +23,7 @@ Also keep track of wins as they happen and call them out explicitly. Progress is
 - Treat this as learning by building something real and useful, not exercises
 - Claude acts as co-pilot throughout: code, concepts, and guidance
 - Don't just hand over code — make sure the developer understands it
+- **Always add comments to code** — every function and routine should have a comment explaining what it does and why
 
 ## Long-term goal
 
