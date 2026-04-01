@@ -42,6 +42,16 @@ A Go-based S3 management suite. Current version: 0.14.
   - Shareable download page with per-file streaming
   - Configurable expiry, upload size limit, key prefix
 
+### Known gaps / future work
+- **Credential security:** Config file currently stores access key and secret key as plain text with `0600` file permissions. This is a conscious decision for now — the plan is to add a secure storage mechanism later (e.g. OS keychain / Windows Credential Manager), similar to how S3 Browser uses Windows DPAPI. Flag this when the topic comes up.
+- Multipart upload (PutObject has a 5GB limit)
+- Copy / Move objects
+- Presigned URLs
+- Sync (upload only changed files)
+- Storage usage summary (du)
+- Bucket listing
+- Structured JSON output for scripting
+
 ### Stack
 - Language: Go 1.24
 - AWS SDK: aws-sdk-go-v2
