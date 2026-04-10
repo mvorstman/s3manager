@@ -71,10 +71,11 @@ func main() {
 
 	switch *action {
 	case "list":
-		_, err := s3pkg.ListObjects(ctx, client, *bucket, *prefix, int32(*maxKeys))
+		result, err := enginepkg.ListObjects(ctx, client, *bucket, *prefix, int32(*maxKeys))
 		if err != nil {
 			log.Fatalf("list failed: %v", err)
 		}
+		enginepkg.PrintListResult(result)
 
 	case "upload":
 		if *filePath == "" || *objectKey == "" {
