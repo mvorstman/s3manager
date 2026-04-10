@@ -5,114 +5,72 @@ import (
 	"flag"
 	"fmt"
 	"log"
+
+	s3pkg "s3manager/internal/s3"
 )
 
 const version = "0.14"
 
 func main() {
 	action := flag.String("action", "list", "Action to perform: list | upload | upload-folder | download | download-prefix | head | delete")
-	endpoint := flag.String("endpoint", "", "S3 endpoint, for example https://s3.example.local")
+	endpoint := flag.String("endpoint", "", "S3 endpoint")
 	region := flag.String("region", "us-east-1", "AWS region")
 	accessKey := flag.String("access-key", "", "S3 access key")
 	secretKey := flag.String("secret-key", "", "S3 secret key")
 	bucket := flag.String("bucket", "", "Bucket name")
 	prefix := flag.String("prefix", "", "Optional prefix filter")
-	maxKeys := flag.Int("max-keys", 1000, "Max objects per request (pagination size)")
+	maxKeys := flag.Int("max-keys", 1000, "Max objects per request")
 
-	// Shared behavior flags
-	workers := flag.Int("workers", 4, "Number of parallel workers")
-	verbose := flag.Bool("verbose", false, "Show detailed per-file/per-object output instead of only summary")
+	workers := flag.Int("workers", 4, "Number of workers")
+	verbose := flag.Bool("verbose", false, "Verbose output")
 
-	// Retry / resilience flags
-	maxAttempts := flag.Int("max-attempts", 5, "Maximum retry attempts for AWS SDK operations")
-	retryMaxBackoffMs := flag.Int("retry-max-backoff-ms", 5000, "Maximum retry backoff in milliseconds")
+	maxAttempts := flag.Int("max-attempts", 5, "Retry attempts")
+	retryMaxBackoffMs := flag.Int("retry-max-backoff-ms", 5000, "Retry backoff")
 
-	// Shared object flags
-	objectKey := flag.String("key", "", "Object key in S3")
-
-	// Upload-specific flags
-	filePath := flag.String("file", "", "Local file to upload")
-	folderPath := flag.String("folder", "", "Local folder to upload recursively")
-	keyPrefix := flag.String("key-prefix", "", "Optional S3 key prefix for folder uploads")
-
-	// Download-specific flags
-	outputPath := flag.String("out", "", "Local output file path for single-object download")
-	outputDir := flag.String("out-dir", "", "Local output directory for prefix download")
-
-	// Delete-specific flag
-	dryRun := flag.Bool("dry-run", true, "If true, only show what would be deleted")
+	objectKey := flag.String("key", "", "Object key")
+	filePath := flag.String("file", "", "File to upload")
+	folderPath := flag.String("folder", "", "Folder to upload")
+	keyPrefix := flag.String("key-prefix", "", "Key prefix")
+	outputPath := flag.String("out", "", "Output file")
+	outputDir := flag.String("out-dir", "", "Output dir")
+	dryRun := flag.Bool("dry-run", true, "Dry run delete")
 
 	flag.Parse()
 
+	// temporary: mark unused flags as used during refactor
+	_ = workers
+	_ = verbose
+	_ = objectKey
+	_ = filePath
+	_ = folderPath
+	_ = keyPrefix
+	_ = outputPath
+	_ = outputDir
+	_ = dryRun
+
 	fmt.Println("S3Manager v" + version)
-
-	if *endpoint == "" || *accessKey == "" || *secretKey == "" || *bucket == "" {
-		log.Fatal("endpoint, access-key, secret-key, and bucket are required")
-	}
-
-	if *workers < 1 {
-		log.Fatal("--workers must be at least 1")
-	}
-
-	if *maxAttempts < 1 {
-		log.Fatal("--max-attempts must be at least 1")
-	}
-
-	if *retryMaxBackoffMs < 0 {
-		log.Fatal("--retry-max-backoff-ms must be 0 or higher")
-	}
 
 	ctx := context.Background()
 
-	client, err := newS3Client(
-		ctx,
-		*endpoint,
-		*region,
-		*accessKey,
-		*secretKey,
-		*maxAttempts,
-		*retryMaxBackoffMs,
-	)
+	client, err := s3pkg.NewClient(ctx, s3pkg.ClientConfig{
+		Endpoint:          *endpoint,
+		Region:            *region,
+		AccessKey:         *accessKey,
+		SecretKey:         *secretKey,
+		UsePathStyle:      true,
+		MaxAttempts:       *maxAttempts,
+		RetryMaxBackoffMs: *retryMaxBackoffMs,
+	})
 	if err != nil {
-		log.Fatalf("failed to create S3 client: %v", err)
+		log.Fatalf("failed to create client: %v", err)
 	}
 
 	switch *action {
 	case "list":
-		listAllObjects(ctx, client, *bucket, *prefix, int32(*maxKeys))
-
-	case "upload":
-		if *filePath == "" || *objectKey == "" {
-			log.Fatal("for upload, both --file and --key are required")
+		_, err := s3pkg.ListObjects(ctx, client, *bucket, *prefix, int32(*maxKeys))
+		if err != nil {
+			log.Fatalf("list failed: %v", err)
 		}
-		uploadFile(ctx, client, *bucket, *filePath, *objectKey)
-
-	case "upload-folder":
-		if *folderPath == "" {
-			log.Fatal("for upload-folder, --folder is required")
-		}
-		uploadFolder(ctx, client, *bucket, *folderPath, *keyPrefix, *workers, *verbose)
-
-	case "download":
-		if *objectKey == "" || *outputPath == "" {
-			log.Fatal("for download, both --key and --out are required")
-		}
-		downloadFile(ctx, client, *bucket, *objectKey, *outputPath)
-
-	case "download-prefix":
-		if *prefix == "" || *outputDir == "" {
-			log.Fatal("for download-prefix, both --prefix and --out-dir are required")
-		}
-		downloadPrefix(ctx, client, *bucket, *prefix, *outputDir, int32(*maxKeys), *workers, *verbose)
-
-	case "head":
-		if *objectKey == "" {
-			log.Fatal("for head, --key is required")
-		}
-		headObject(ctx, client, *bucket, *objectKey)
-
-	case "delete":
-		deleteObjectsByPrefix(ctx, client, *bucket, *prefix, int32(*maxKeys), *dryRun, *workers, *verbose)
 
 	default:
 		log.Fatalf("unknown action: %s", *action)

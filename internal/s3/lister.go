@@ -1,24 +1,28 @@
-package main
+package s3
 
 import (
 	"context"
 	"fmt"
-	"log"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
+	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
-func listAllObjects(ctx context.Context, client *s3.Client, bucket, prefix string, maxKeys int32) {
-	var continuationToken *string
+// ListResult contains the aggregated outcome of a list operation.
+type ListResult struct {
+	Pages        int
+	TotalObjects int
+}
 
-	pageNumber := 0
-	totalObjects := 0
+// ListObjects lists all matching objects and writes human-readable output to stdout.
+func ListObjects(ctx context.Context, client *awss3.Client, bucket, prefix string, maxKeys int32) (ListResult, error) {
+	var continuationToken *string
+	result := ListResult{}
 
 	for {
-		pageNumber++
+		result.Pages++
 
-		input := &s3.ListObjectsV2Input{
+		input := &awss3.ListObjectsV2Input{
 			Bucket:            aws.String(bucket),
 			Prefix:            aws.String(prefix),
 			ContinuationToken: continuationToken,
@@ -27,16 +31,16 @@ func listAllObjects(ctx context.Context, client *s3.Client, bucket, prefix strin
 
 		resp, err := client.ListObjectsV2(ctx, input)
 		if err != nil {
-			log.Fatalf("list objects failed on page %d: %v", pageNumber, err)
+			return result, fmt.Errorf("list objects failed on page %d: %w", result.Pages, err)
 		}
 
-		fmt.Printf("Page %d\n", pageNumber)
+		fmt.Printf("Page %d\n", result.Pages)
 		fmt.Printf("  KeyCount: %d\n", aws.ToInt32(resp.KeyCount))
 		fmt.Printf("  MaxKeys: %d\n", maxKeys)
 		fmt.Printf("  IsTruncated: %v\n", aws.ToBool(resp.IsTruncated))
 
 		for _, obj := range resp.Contents {
-			totalObjects++
+			result.TotalObjects++
 			fmt.Printf("%s\t%d\n", aws.ToString(obj.Key), obj.Size)
 		}
 
@@ -47,5 +51,6 @@ func listAllObjects(ctx context.Context, client *s3.Client, bucket, prefix strin
 		continuationToken = resp.NextContinuationToken
 	}
 
-	fmt.Printf("\nDone. Total objects listed: %d\n", totalObjects)
+	fmt.Printf("\nDone. Total objects listed: %d\n", result.TotalObjects)
+	return result, nil
 }
