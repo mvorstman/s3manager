@@ -19,7 +19,6 @@ type DeleteResult struct {
 	Prefix      string
 	DryRun      bool
 	ListedPages int
-	Scanned     int64
 	Queued      int64
 	Deleted     int64
 	Failed      int64
@@ -27,7 +26,15 @@ type DeleteResult struct {
 	Duration    time.Duration
 }
 
-func DeletePrefix(ctx context.Context, client *awss3.Client, bucket, prefix string, maxKeys int32, dryRun bool, workers int, verbose bool) (DeleteResult, error) {
+func DeletePrefix(
+	ctx context.Context,
+	client *awss3.Client,
+	bucket, prefix string,
+	maxKeys int32,
+	dryRun bool,
+	workers int,
+	verbose bool,
+) (DeleteResult, error) {
 	if prefix == "" {
 		return DeleteResult{}, fmt.Errorf("for delete, --prefix is required as a safety measure")
 	}
@@ -48,7 +55,6 @@ func DeletePrefix(ctx context.Context, client *awss3.Client, bucket, prefix stri
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	var scanned int64
 	var queued int64
 	var deleted int64
 	var failed int64
@@ -70,7 +76,6 @@ func DeletePrefix(ctx context.Context, client *awss3.Client, bucket, prefix stri
 			}
 
 			for _, obj := range resp.Contents {
-				atomic.AddInt64(&scanned, 1)
 				atomic.AddInt64(&queued, 1)
 				if verbose {
 					fmt.Printf("DRY-RUN would delete %s\t%d\n", aws.ToString(obj.Key), obj.Size)
@@ -83,8 +88,7 @@ func DeletePrefix(ctx context.Context, client *awss3.Client, bucket, prefix stri
 			continuationToken = resp.NextContinuationToken
 		}
 
-		result.Scanned = scanned
-		result.Queued = queued
+		result.Queued = atomic.LoadInt64(&queued)
 		result.Duration = time.Since(start)
 		return result, nil
 	}
@@ -179,7 +183,6 @@ func DeletePrefix(ctx context.Context, client *awss3.Client, bucket, prefix stri
 		}
 
 		for _, obj := range resp.Contents {
-			atomic.AddInt64(&scanned, 1)
 			atomic.AddInt64(&queued, 1)
 
 			if verbose {
@@ -217,7 +220,6 @@ func DeletePrefix(ctx context.Context, client *awss3.Client, bucket, prefix stri
 	default:
 	}
 
-	result.Scanned = atomic.LoadInt64(&scanned)
 	result.Queued = atomic.LoadInt64(&queued)
 	result.Deleted = atomic.LoadInt64(&deleted)
 	result.Failed = atomic.LoadInt64(&failed)
@@ -232,14 +234,13 @@ func PrintDeleteResult(result DeleteResult) {
 	fmt.Printf("  Prefix: %s\n", result.Prefix)
 	fmt.Printf("  Dry-run: %v\n", result.DryRun)
 	fmt.Printf("  Listed pages: %d\n", result.ListedPages)
-	fmt.Printf("  Objects scanned: %d\n", result.Scanned)
-	fmt.Printf("  Objects queued: %d\n", result.Queued)
+	fmt.Printf("  Queued: %d\n", result.Queued)
 	if result.DryRun {
 		fmt.Printf("  Would delete: %d\n", result.Queued)
 	} else {
-		fmt.Printf("  Delete batch calls: %d\n", result.BatchCalls)
-		fmt.Printf("  Objects deleted: %d\n", result.Deleted)
-		fmt.Printf("  Objects failed: %d\n", result.Failed)
+		fmt.Printf("  Batch calls: %d\n", result.BatchCalls)
+		fmt.Printf("  Deleted: %d\n", result.Deleted)
+		fmt.Printf("  Failed: %d\n", result.Failed)
 	}
 	fmt.Printf("  Duration: %s\n", result.Duration.Round(time.Millisecond))
 }
