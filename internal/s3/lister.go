@@ -3,6 +3,7 @@ package s3
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
@@ -39,10 +40,11 @@ func ListObjects(ctx context.Context, client *awss3.Client, bucket, prefix strin
 		fmt.Printf("  MaxKeys: %d\n", maxKeys)
 		fmt.Printf("  IsTruncated: %v\n", aws.ToBool(resp.IsTruncated))
 
-		for _, obj := range resp.Contents {
-			result.TotalObjects++
-			fmt.Printf("%s\t%d\n", aws.ToString(obj.Key), obj.Size)
-		}
+	for _, obj := range resp.Contents {
+		result.TotalObjects++
+		key := strings.TrimRight(aws.ToString(obj.Key), "\x00")
+		fmt.Printf("%s\t%d\n", key, aws.ToInt64(obj.Size))
+}
 
 		if !aws.ToBool(resp.IsTruncated) {
 			break

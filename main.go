@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 
 	enginepkg "s3manager/internal/engine"
 	s3pkg "s3manager/internal/s3"
@@ -12,6 +13,18 @@ import (
 )
 
 const version = "0.14"
+
+func flagOrEnv(flagValue string, envKeys ...string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	for _, key := range envKeys {
+		if value := os.Getenv(key); value != "" {
+			return value
+		}
+	}
+	return ""
+}
 
 func main() {
 	action := flag.String("action", "list", "Action to perform: list | upload | upload-folder | download | download-prefix | head | delete")
@@ -39,10 +52,15 @@ func main() {
 
 	flag.Parse()
 
+	endpointValue := flagOrEnv(*endpoint, "S3_ENDPOINT")
+	regionValue := flagOrEnv(*region, "AWS_REGION", "AWS_DEFAULT_REGION")
+	accessKeyValue := flagOrEnv(*accessKey, "AWS_ACCESS_KEY_ID")
+	secretKeyValue := flagOrEnv(*secretKey, "AWS_SECRET_ACCESS_KEY")
+
 	fmt.Println("S3Manager v" + version)
 
-	if *endpoint == "" || *accessKey == "" || *secretKey == "" || *bucket == "" {
-		log.Fatal("endpoint, access-key, secret-key, and bucket are required")
+	if endpointValue == "" || accessKeyValue == "" || secretKeyValue == "" || *bucket == "" {
+		log.Fatal("endpoint, bucket, and credentials are required (use flags or env: S3_ENDPOINT, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION)")
 	}
 	if *workers < 1 {
 		log.Fatal("--workers must be at least 1")
@@ -57,10 +75,10 @@ func main() {
 	ctx := context.Background()
 
 	client, err := s3pkg.NewClient(ctx, s3pkg.ClientConfig{
-		Endpoint:          *endpoint,
-		Region:            *region,
-		AccessKey:         *accessKey,
-		SecretKey:         *secretKey,
+		Endpoint:          endpointValue,
+		Region:            regionValue,
+		AccessKey:         accessKeyValue,
+		SecretKey:         secretKeyValue,
 		UsePathStyle:      true,
 		MaxAttempts:       *maxAttempts,
 		RetryMaxBackoffMs: *retryMaxBackoffMs,

@@ -1,5 +1,4 @@
-AWS_ACCESS_KEY_ID: J8LQFJKXA6DJZ31JAVHS 
-AWS_SECRET_ACCESS_KEY: jpEVTH/ZmY4IGJHDkcowPR26WSf7v6Fo73Lwh5CE
+
 bucket: temp-8155
 region: us-east-1
 endpoint: https://s3-nl03.cloud.dm-p.com
@@ -16,6 +15,8 @@ go mod init s3manager
 cd C:\dev\s3manager
 gofmt -w .\main.go
 go run .
+
+
 
 
 go run . --endpoint https://s3-nl03.cloud.dm-p.com --region us-east-1 --access-key J8LQFJKXA6DJZ31JAVHS --secret-key jpEVTH/ZmY4IGJHDkcowPR26WSf7v6Fo73Lwh5CE --bucket temp-8155
