@@ -96,8 +96,6 @@ func main() {
 		}
 		enginepkg.PrintUploadFolderResult(result)
 
-
-
 	case "download":
 		if *objectKey == "" || *outputPath == "" {
 			log.Fatal("for download, both --key and --out are required")
@@ -129,11 +127,11 @@ func main() {
 		s3pkg.PrintHeadResult(result)
 
 	case "delete":
-		result, err := deleteObjectsByPrefix(ctx, client, *bucket, *prefix, int32(*maxKeys), *dryRun, *workers, *verbose)
+		result, err := enginepkg.DeletePrefix(ctx, client, *bucket, *prefix, int32(*maxKeys), *dryRun, *workers, *verbose)
 		if err != nil {
 			log.Fatalf("delete failed: %v", err)
 		}
-		printDeleteResult(result)
+		enginepkg.PrintDeleteResult(result)
 
 	default:
 		log.Fatalf("unknown action: %s", *action)

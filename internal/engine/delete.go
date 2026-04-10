@@ -1,4 +1,4 @@
-package main
+package engine
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 	types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
-const maxDeleteBatchSize = 1000
+const MaxDeleteBatchSize = 1000
 
 type DeleteResult struct {
 	Bucket      string
@@ -27,7 +27,7 @@ type DeleteResult struct {
 	Duration    time.Duration
 }
 
-func deleteObjectsByPrefix(ctx context.Context, client *awss3.Client, bucket, prefix string, maxKeys int32, dryRun bool, workers int, verbose bool) (DeleteResult, error) {
+func DeletePrefix(ctx context.Context, client *awss3.Client, bucket, prefix string, maxKeys int32, dryRun bool, workers int, verbose bool) (DeleteResult, error) {
 	if prefix == "" {
 		return DeleteResult{}, fmt.Errorf("for delete, --prefix is required as a safety measure")
 	}
@@ -123,7 +123,6 @@ func deleteObjectsByPrefix(ctx context.Context, client *awss3.Client, bucket, pr
 
 				deletedCount := int64(len(resp.Deleted))
 				failedCount := int64(len(resp.Errors))
-
 				if deletedCount == 0 && failedCount == 0 {
 					deletedCount = int64(len(batch))
 				}
@@ -144,7 +143,7 @@ func deleteObjectsByPrefix(ctx context.Context, client *awss3.Client, bucket, pr
 	}
 
 	var continuationToken *string
-	batch := make([]types.ObjectIdentifier, 0, maxDeleteBatchSize)
+	batch := make([]types.ObjectIdentifier, 0, MaxDeleteBatchSize)
 
 	flushBatch := func() error {
 		if len(batch) == 0 {
@@ -188,7 +187,7 @@ func deleteObjectsByPrefix(ctx context.Context, client *awss3.Client, bucket, pr
 			}
 
 			batch = append(batch, types.ObjectIdentifier{Key: obj.Key})
-			if len(batch) == maxDeleteBatchSize {
+			if len(batch) == MaxDeleteBatchSize {
 				if err := flushBatch(); err != nil {
 					close(jobs)
 					wg.Wait()
@@ -227,7 +226,7 @@ func deleteObjectsByPrefix(ctx context.Context, client *awss3.Client, bucket, pr
 	return result, nil
 }
 
-func printDeleteResult(result DeleteResult) {
+func PrintDeleteResult(result DeleteResult) {
 	fmt.Println("Delete summary")
 	fmt.Printf("  Bucket: %s\n", result.Bucket)
 	fmt.Printf("  Prefix: %s\n", result.Prefix)
