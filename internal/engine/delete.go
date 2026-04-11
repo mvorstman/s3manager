@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
@@ -34,9 +35,10 @@ func DeletePrefix(
 	dryRun bool,
 	workers int,
 	verbose bool,
+	allowEmptyPrefix bool,
 ) (DeleteResult, error) {
-	if prefix == "" {
-		return DeleteResult{}, fmt.Errorf("for delete, --prefix is required as a safety measure")
+	if prefix == "" && !allowEmptyPrefix {
+		return DeleteResult{}, fmt.Errorf("for delete, --prefix is required unless --allow-empty-prefix-delete=true is set")
 	}
 	if workers < 1 {
 		workers = 1
@@ -78,7 +80,8 @@ func DeletePrefix(
 			for _, obj := range resp.Contents {
 				atomic.AddInt64(&queued, 1)
 				if verbose {
-					fmt.Printf("DRY-RUN would delete %s\t%d\n", aws.ToString(obj.Key), obj.Size)
+					key := strings.TrimRight(aws.ToString(obj.Key), "\x00")
+					fmt.Printf("DRY-RUN would delete %s\t%d\n", key, aws.ToInt64(obj.Size))
 				}
 			}
 
@@ -186,7 +189,8 @@ func DeletePrefix(
 			atomic.AddInt64(&queued, 1)
 
 			if verbose {
-				fmt.Printf("Queue delete %s\t%d\n", aws.ToString(obj.Key), obj.Size)
+			key := strings.TrimRight(aws.ToString(obj.Key), "\x00")
+			fmt.Printf("Queue delete %s\t%d\n", key, aws.ToInt64(obj.Size))
 			}
 
 			batch = append(batch, types.ObjectIdentifier{Key: obj.Key})

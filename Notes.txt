@@ -1,114 +1,37 @@
-
-bucket: temp-8155
-region: us-east-1
-endpoint: https://s3-nl03.cloud.dm-p.com
-
-cd C:\dev\s3manager
-dir
-Get-Content .\main.go
-go run .
-
-mkdir C:\dev\s3manager -Force
-cd C:\dev\s3manager
-go mod init s3manager
-
-cd C:\dev\s3manager
-gofmt -w .\main.go
-go run .
+load enviroment variables
+> source ~/.s3manager-env
 
 
 
+test files
+mkdir -p ~/s3manager-test/temp-8155-uploadset
 
-go run . --endpoint https://s3-nl03.cloud.dm-p.com --region us-east-1 --access-key J8LQFJKXA6DJZ31JAVHS --secret-key jpEVTH/ZmY4IGJHDkcowPR26WSf7v6Fo73Lwh5CE --bucket temp-8155
+python3 - <<'PY'
+import os
+import random
+from pathlib import Path
 
+root = Path.home() / "s3manager-test" / "temp-8155-uploadset"
+root.mkdir(parents=True, exist_ok=True)
 
-List
---------------------------------------------
-go run . `
---action list `
---endpoint https://s3-nl03.cloud.dm-p.com `
---region us-east-1 `
---access-key J8LQFJKXA6DJZ31JAVHS `
---secret-key jpEVTH/ZmY4IGJHDkcowPR26WSf7v6Fo73Lwh5CE `
---bucket temp-8155 `
---max-keys 5
+random.seed(42)
 
+file_count = 2000
+max_depth = 4
+folder_span = 6
 
-Upload
----------------------------------------------
-go run . `
---action upload `
---endpoint https://s3-nl03.cloud.dm-p.com `
---region us-east-1 `
---access-key J8LQFJKXA6DJZ31JAVHS `
---secret-key jpEVTH/ZmY4IGJHDkcowPR26WSf7v6Fo73Lwh5CE `
---bucket temp-8155 `
---file C:\test\test.txt `
---key test.txt
+for i in range(file_count):
+    depth = random.randint(0, max_depth)
+    parts = [f"folder{random.randint(1, folder_span)}" for _ in range(depth)]
+    d = root.joinpath(*parts)
+    d.mkdir(parents=True, exist_ok=True)
 
-Upload Folder
-------------------------------------------
-go run . `
---action upload-folder `
---endpoint https://s3-nl03.cloud.dm-p.com `
---region us-east-1 `
---access-key J8LQFJKXA6DJZ31JAVHS `
---secret-key jpEVTH/ZmY4IGJHDkcowPR26WSf7v6Fo73Lwh5CE `
---bucket temp-8155 `
---folder C:\temp\s3-test-data `
---prefix TF/
---workers 8
+    filename = f"file_{i:06d}.txt"
+    size = random.choice([1024, 2048, 4096, 8192])
 
+    with open(d / filename, "wb") as f:
+        f.write(os.urandom(size))
 
-Download
--------------------------------------------
-go run . `
---action download `
---endpoint https://s3-nl03.cloud.dm-p.com `
---region us-east-1 `
---access-key J8LQFJKXA6DJZ31JAVHS `
---secret-key jpEVTH/ZmY4IGJHDkcowPR26WSf7v6Fo73Lwh5CE `
---bucket temp-8155 `
---key test.txt `
---out C:\temp\downloaded-test.txt
-
-
-Delete
-------------------------------------------
-go run . `
---action delete `
---endpoint https://s3-nl03.cloud.dm-p.com `
---region us-east-1 `
---access-key J8LQFJKXA6DJZ31JAVHS `
---secret-key jpEVTH/ZmY4IGJHDkcowPR26WSf7v6Fo73Lwh5CE `
---bucket temp-8155 `
---prefix test `
---max-keys 5 `
---dry-run=true
-
-
-go run . `
->> --action delete `
->> --endpoint https://s3-nl03.cloud.dm-p.com `
->> --region us-east-1 `
->> --access-key J8LQFJKXA6DJZ31JAVHS `
->> --secret-key jpEVTH/ZmY4IGJHDkcowPR26WSf7v6Fo73Lwh5CE `
->> --bucket temp-8155 `
->> --prefix TF `
->> --max-keys 10 `
->> --dry-run=false
-
-go run . `
---action delete `
---endpoint https://s3-nl03.cloud.dm-p.com `
---region us-east-1 `
---access-key YOURKEY `
---secret-key YOURSECRET `
---bucket temp-8155 `
---prefix TF/ `
---max-keys 1000 `
---dry-run=false `
---workers 4 `
---verbose=true
-
+print(f"Created {file_count} files under {root}")
+PY
 

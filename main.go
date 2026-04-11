@@ -9,10 +9,9 @@ import (
 
 	enginepkg "s3manager/internal/engine"
 	s3pkg "s3manager/internal/s3"
-	
 )
 
-const version = "0.14"
+const version = "0.2.0"
 
 func flagOrEnv(flagValue string, envKeys ...string) string {
 	if flagValue != "" {
@@ -49,7 +48,7 @@ func main() {
 	outputPath := flag.String("out", "", "Local output file path for single-object download")
 	outputDir := flag.String("out-dir", "", "Local output directory for prefix download")
 	dryRun := flag.Bool("dry-run", true, "If true, only show what would be deleted")
-
+	allowEmptyPrefixDelete := flag.Bool("allow-empty-prefix-delete", false, "Allow delete to operate on the bucket root when --prefix is empty")
 	flag.Parse()
 
 	endpointValue := flagOrEnv(*endpoint, "S3_ENDPOINT")
@@ -126,8 +125,8 @@ func main() {
 		s3pkg.PrintDownloadResult(result)
 
 	case "download-prefix":
-		if *prefix == "" || *outputDir == "" {
-			log.Fatal("for download-prefix, both --prefix and --out-dir are required")
+		if *outputDir == "" {
+			log.Fatal("for download-prefix, --out-dir is required")
 		}
 		result, err := enginepkg.DownloadPrefix(ctx, client, *bucket, *prefix, *outputDir, int32(*maxKeys), *workers, *verbose)
 		if err != nil {
@@ -146,7 +145,11 @@ func main() {
 		s3pkg.PrintHeadResult(result)
 
 	case "delete":
-		result, err := enginepkg.DeletePrefix(ctx, client, *bucket, *prefix, int32(*maxKeys), *dryRun, *workers, *verbose)
+		if *prefix == "" && !*allowEmptyPrefixDelete {
+			log.Fatal("for delete at bucket root, set --allow-empty-prefix-delete=true")
+		}
+
+		result, err := enginepkg.DeletePrefix(ctx, client, *bucket, *prefix, int32(*maxKeys), *dryRun, *workers, *verbose, *allowEmptyPrefixDelete)
 		if err != nil {
 			log.Fatalf("delete failed: %v", err)
 		}
