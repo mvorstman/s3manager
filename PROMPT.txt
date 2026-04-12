@@ -45,6 +45,7 @@ Current status:
 - worker count is configurable with --workers
 - real-world performance testing was done successfully
 - current upload-folder implementation is working correctly
+- upload pipeline now includes retry, context-aware backoff, retry filtering, progress reporting, and retry visibility
 
 Current upload architecture:
 - internal/engine/upload_types.go

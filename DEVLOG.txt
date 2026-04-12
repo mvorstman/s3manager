@@ -35,8 +35,108 @@ LEARNINGS:
 NEXT STEP:
 - 
 
+DATE (YYYY-MM-DD HH:MM): 2026-04-12 23:20
+
+FOCUS:
+Document system architecture and data flow
+
+CHANGES:
+- Created ARCHITECTURE.md
+- Documented layer responsibilities and data flow
+- Defined key structs and concurrency model
+- Formalized design rules and system contracts
+
+RESULT:
+- Clear understanding of how components interact
+- Easier future development and onboarding
+- Reduced risk of architectural drift
+
+LEARNINGS:
+- Architecture documentation is essential once complexity grows
+- Explicit design rules prevent future inconsistencies
+
+NEXT STEP:
+- Improve progress output UX
+- Continue refining CLI usability
+
 
 ===== ENTRIES =====
+
+DATE (YYYY-MM-DD HH:MM): 2026-04-12 23:05
+
+FOCUS:
+Add retry visibility to upload-folder summary
+
+CHANGES:
+- Extended UploadFileResult with per-file retry count
+- Extended UploadFolderResult with FilesWithRetries and TotalRetries
+- Aggregated retry counts in UploadFolder()
+- Added retry visibility to PrintUploadFolderResult()
+
+RESULT:
+- Upload summary now shows how many files needed retries
+- Upload summary now shows total retry attempts for the whole run
+- Retry behavior is now visible without enabling verbose per-file output
+
+BENCHMARK:
+workers | duration | throughput | retries
+--------|----------|------------|--------
+35      | ~2.73s   | ~2.68 MiB/s | 0
+
+VALIDATION:
+- Upload completed successfully (2000 files, 0 failures)
+- Retry visibility fields printed correctly in summary
+- Files with retries and total retries both reported as 0 on a clean run
+- No regression observed in upload correctness
+
+LEARNINGS:
+- Reliability features should also include observability
+- Summary-level retry metrics are useful without cluttering normal output
+- Clean result models make it easy to add new reporting fields
+
+NEXT STEP:
+- Improve progress output formatting (single-line update instead of many lines)
+- Consider making progress interval configurable
+- Consider optional verbose reporting for retried files only
+
+
+DATE (YYYY-MM-DD HH:MM): 2026-04-12 22:45
+
+FOCUS:
+Add live progress reporting to upload-folder
+
+CHANGES:
+- Added progress tracking in UploadFolder()
+- Introduced completed and total counters
+- Implemented periodic progress output (every 100 files + final)
+- Ensured progress reporting is handled in aggregation layer (not workers)
+
+RESULT:
+- Users now get real-time visibility during uploads
+- Output shows progress in terms of files completed and percentage
+- No impact on worker behavior or architecture
+
+BENCHMARK:
+workers | duration | throughput
+--------|----------|-----------
+35      | ~3.07s   | ~2.38 MiB/s
+
+VALIDATION:
+- Code builds successfully (go build ./...)
+- Upload test completed (2000 files, 0 failures)
+- Progress output matches expected increments and final state
+- No regression in upload correctness
+
+LEARNINGS:
+- Progress reporting belongs in aggregation layer, not execution layer
+- Controlled output frequency avoids terminal flooding
+- Visibility significantly improves usability of CLI tools
+
+NEXT STEP:
+- Add retry visibility (count number of retries per run)
+- Improve progress output formatting (single-line update instead of multiple lines)
+- Consider making progress interval configurable
+
 
 DATE (YYYY-MM-DD HH:MM): 2026-04-12 22:30
 

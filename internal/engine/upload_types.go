@@ -14,15 +14,18 @@ type UploadFileResult struct {
 	Bytes     int64
 	Duration  time.Duration
 	Err       error
+	Retries   int
 }
 
 type UploadFolderResult struct {
-	TotalFiles      int
-	SuccessfulFiles int
-	FailedFiles     int
-	TotalBytes      int64
-	UploadedBytes   int64
-	FailedBytes     int64
-	Duration        time.Duration
-	Files           []UploadFileResult
+	TotalFiles       int
+	SuccessfulFiles  int
+	FailedFiles      int
+	TotalBytes       int64
+	UploadedBytes    int64
+	FailedBytes      int64
+	FilesWithRetries int
+	TotalRetries     int
+	Duration         time.Duration
+	Files            []UploadFileResult
 }

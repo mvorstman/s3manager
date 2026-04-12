@@ -57,9 +57,11 @@ func uploadWorker(
 	jobs <-chan UploadJob,
 	results chan<- UploadFileResult,
 ) {
+
 	for job := range jobs {
 		fileStart := time.Now()
 		maxAttempts := 3
+		retries := 0
 
 		var uploadResult s3pkg.UploadResult
 		var err error
@@ -75,6 +77,7 @@ func uploadWorker(
 			}
 
 			if attempt < maxAttempts {
+				retries++
 				var backoff time.Duration
 				switch attempt {
 				case 1:
@@ -101,6 +104,7 @@ func uploadWorker(
 				Key:       job.Key,
 				Bytes:     job.Size,
 				Duration:  time.Since(fileStart),
+				Retries:   retries,
 				Err:       err,
 			}
 			continue
@@ -111,6 +115,7 @@ func uploadWorker(
 			Key:       job.Key,
 			Bytes:     uploadResult.Size,
 			Duration:  time.Since(fileStart),
+			Retries:   retries,
 			Err:       nil,
 		}
 	}
@@ -176,6 +181,10 @@ func UploadFolder(
 			percent := float64(completed) / float64(total) * 100
 			fmt.Printf("Progress: %d / %d (%.0f%%)\n", completed, total, percent)
 		}
+		result.TotalRetries += fileResult.Retries
+		if fileResult.Retries > 0 {
+			result.FilesWithRetries++
+		}
 		if fileResult.Err != nil {
 			result.FailedFiles++
 			result.FailedBytes += fileResult.Bytes
@@ -199,6 +208,8 @@ func PrintUploadFolderResult(result UploadFolderResult) {
 	fmt.Printf("  Total bytes: %d\n", result.TotalBytes)
 	fmt.Printf("  Uploaded bytes: %d\n", result.UploadedBytes)
 	fmt.Printf("  Failed bytes: %d\n", result.FailedBytes)
+	fmt.Printf("  Files with retries: %d\n", result.FilesWithRetries)
+	fmt.Printf("  Total retries: %d\n", result.TotalRetries)
 	fmt.Printf("  Duration: %s\n", result.Duration)
 
 	throughputMiB := 0.0
