@@ -1,0 +1,76 @@
+===== S3MANAGER DEVELOPMENT LOG =====
+
+Purpose:
+Track progress, decisions, benchmarks, and learnings during development.
+
+
+===== CURRENT FOCUS =====
+Implement retry with exponential backoff in uploadWorker
+
+
+===== ENTRY TEMPLATE =====
+
+DATE:
+
+FOCUS:
+(What feature or problem you worked on)
+
+CHANGES:
+- 
+- 
+- 
+
+RESULT:
+(What works now / what improved)
+
+BENCHMARK (if applicable):
+workers | duration | throughput
+--------|----------|-----------
+        |          |           
+
+LEARNINGS:
+- 
+- 
+
+NEXT STEP:
+- 
+
+
+===== ENTRIES =====
+
+DATE: 2026-04-12
+
+FOCUS:
+Implement parallel upload-folder using worker pool
+
+CHANGES:
+- Added BuildUploadJobs() to separate discovery from execution
+- Implemented uploadWorker()
+- Introduced jobsCh and resultsCh channels
+- Implemented worker pool using sync.WaitGroup
+- Added configurable --workers flag
+- Added throughput calculation in summary output
+
+RESULT:
+- upload-folder now runs in parallel
+- scaling confirmed via real tests
+- clean separation between engine and s3 layer maintained
+
+BENCHMARK:
+workers | duration | throughput
+--------|----------|-----------
+1       | ~92s     | ~0.08 MiB/s
+8       | ~9.5s    | ~0.8 MiB/s
+40      | ~2.1s    | ~3.4 MiB/s
+50      | ~1.8s    | ~3.9 MiB/s
+200     | ~2.7s    | ~2.6 MiB/s
+
+LEARNINGS:
+- Workload is I/O bound, not CPU bound
+- Increasing workers improves performance until saturation
+- Optimal worker range ~40–60 for current setup
+- Too many workers adds overhead and reduces efficiency
+
+NEXT STEP:
+- Implement retry with exponential backoff in uploadWorker
+- Add live progress reporting

@@ -35,3 +35,183 @@ for i in range(file_count):
 print(f"Created {file_count} files under {root}")
 PY
 
+
+===== USAGE NOTES =====
+- Never run delete on an empty prefix (risk of deleting entire bucket)
+- Prefer implementing and using a --dry-run flag for delete operations
+- Validate with list before delete
+- Consider adding safety checks in code for destructive operations
+
+===== ENVIRONMENT =====
+load enviroment variables
+> source ~/.s3manager-env
+
+
+===== TEST DATASET CREATION =====
+mkdir -p ~/s3manager-test/temp-8155-uploadset
+
+python3 - <<'PY'
+import os
+import random
+from pathlib import Path
+
+root = Path.home() / "s3manager-test" / "temp-8155-uploadset"
+root.mkdir(parents=True, exist_ok=True)
+
+random.seed(42)
+
+file_count = 2000
+max_depth = 4
+folder_span = 6
+
+for i in range(file_count):
+    depth = random.randint(0, max_depth)
+    parts = [f"folder{random.randint(1, folder_span)}" for _ in range(depth)]
+    d = root.joinpath(*parts)
+    d.mkdir(parents=True, exist_ok=True)
+
+    filename = f"file_{i:06d}.txt"
+    size = random.choice([1024, 2048, 4096, 8192])
+
+    with open(d / filename, "wb") as f:
+        f.write(os.urandom(size))
+
+print(f"Created {file_count} files under {root}")
+PY
+
+
+===== DATASET VERIFICATION =====
+find ~/s3manager-test/temp-8155-uploadset -type f | wc -l
+du -sh ~/s3manager-test/temp-8155-uploadset
+
+
+===== QUICK START =====
+1. source ~/.s3manager-env
+2. run upload test command
+3. check summary + throughput
+
+
+===== UPLOAD TEST COMMAND =====
+go run . \
+  --action upload-folder \
+  --bucket temp-8155 \
+  --folder ~/s3manager-test/temp-8155-uploadset \
+  --workers 40 \
+  --prefix "TF-40/"
+
+
+===== SAMPLE COMMANDS =====
+
+# Upload single file
+go run . \
+  --action upload-file \
+  --bucket temp-8155 \
+  --file ~/s3manager-test/temp-8155-uploadset/file_000001.txt \
+  --key "sample/file_000001.txt"
+
+# Upload folder (parallel)
+go run . \
+  --action upload-folder \
+  --bucket temp-8155 \
+  --folder ~/s3manager-test/temp-8155-uploadset \
+  --workers 40 \
+  --prefix "sample-upload/"
+
+# List objects
+go run . \
+  --action list \
+  --bucket temp-8155 \
+  --prefix "sample-upload/"
+
+# Download by prefix
+go run . \
+  --action download-prefix \
+  --bucket temp-8155 \
+  --prefix "sample-upload/" \
+  --out ~/s3manager-test/download
+
+# Delete by prefix (careful!)
+go run . \
+  --action delete-prefix \
+  --bucket temp-8155 \
+  --prefix "sample-upload/" \
+  --workers 40
+
+
+===== BENCHMARK COMMANDS =====
+go run . --action upload-folder --bucket temp-8155 --folder ~/s3manager-test/temp-8155-uploadset --workers 1 --prefix "bench-1/"
+go run . --action upload-folder --bucket temp-8155 --folder ~/s3manager-test/temp-8155-uploadset --workers 8 --prefix "bench-8/"
+go run . --action upload-folder --bucket temp-8155 --folder ~/s3manager-test/temp-8155-uploadset --workers 16 --prefix "bench-16/"
+go run . --action upload-folder --bucket temp-8155 --folder ~/s3manager-test/temp-8155-uploadset --workers 32 --prefix "bench-32/"
+go run . --action upload-folder --bucket temp-8155 --folder ~/s3manager-test/temp-8155-uploadset --workers 40 --prefix "bench-40/"
+go run . --action upload-folder --bucket temp-8155 --folder ~/s3manager-test/temp-8155-uploadset --workers 50 --prefix "bench-50/"
+go run . --action upload-folder --bucket temp-8155 --folder ~/s3manager-test/temp-8155-uploadset --workers 64 --prefix "bench-64/"
+go run . --action upload-folder --bucket temp-8155 --folder ~/s3manager-test/temp-8155-uploadset --workers 100 --prefix "bench-100/"
+go run . --action upload-folder --bucket temp-8155 --folder ~/s3manager-test/temp-8155-uploadset --workers 200 --prefix "bench-200/"
+
+
+===== SAFETY & USAGE NOTES =====
+- Never run delete on an empty prefix (risk of deleting entire bucket)
+- Always validate with list before delete
+- Prefer implementing and using a --dry-run flag for delete operations
+- Use dedicated prefixes per test (avoid overlap)
+- Download to a clean folder to validate results
+- Test dataset is stable and reproducible
+- Workload is I/O bound
+- Optimal worker range currently ~40-60
+
+
+
+
+===== GIT WORKFLOW =====
+
+# Basic update (daily work)
+git add .
+git commit -m "<short description of change>"
+git push
+
+# Versioned release (milestone)
+git add .
+git commit -m "<milestone description>"
+git tag vX.Y.Z
+git push
+git push origin vX.Y.Z
+
+
+===== WHEN TO COMMIT =====
+- After completing a logical feature (e.g. worker pool, retry, progress)
+- After fixing a bug
+- Before starting a risky change
+- At the end of a working session
+
+
+===== COMMIT MESSAGE STYLE =====
+- Keep it short and clear
+- Describe what changed, not how
+
+Examples:
+- "Add parallel upload-folder with worker pool"
+- "Add throughput reporting to upload summary"
+- "Implement retry with exponential backoff"
+
+
+===== GOOD PRACTICES =====
+- Commit small, meaningful changes (not everything at once)
+- Avoid committing broken code when possible
+- Use tags only for stable milestones
+- Push regularly to avoid losing work
+- Keep DEVLOG.txt aligned with major commits
+
+
+===== QUICK RECOVERY =====
+# Check status
+git status
+
+# See recent commits
+git log --oneline
+
+# Undo last commit (keep changes)
+git reset --soft HEAD~1
+
+# Discard local changes (dangerous)
+git reset --hard

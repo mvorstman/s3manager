@@ -1,4 +1,32 @@
 ================================================================================
+  QUICK BRIEF  (paste this into Chat to bring it up to speed)
+================================================================================
+
+Project : S3Manager — a Go CLI tool evolving into a server-based web app
+          with a browser UI, similar in spirit to S3 Explorer
+Owner   : Michiel
+AI role : Reviewer and advisor only. No file changes without explicit permission.
+          This is a ChatGPT-generated project; Claude validates and comments.
+
+Stack   : Go, AWS SDK v2, S3-compatible endpoints
+Status  : Early stage. CLI is functional (v0.2.0). Web layer not started yet.
+
+Key decisions made so far:
+  - PowerShell companion retired; Go CLI is the sole implementation
+  - Credential strategy: start with env vars (Option 1), migrate to
+    SQLite + AES-256-GCM (Option 2) when multi-user is needed,
+    envelope encryption (Option 3) is long-term
+  - CredentialProvider interface to be defined early to keep migration low-impact
+  - Build in-house, Go standard library only
+
+Open priorities:
+  - Fix go.mod (invalid Go version 1.26.1)
+  - Run go mod tidy + go build to verify clean baseline
+  - Fix lister.go side effects and indentation issues
+
+For full detail see ThirdParty.txt in the project root.
+
+================================================================================
   S3MANAGER — PROJECT CONTEXT & PROGRESS FILE
   Purpose: persistent memory across sessions; AI reads this at the start of
            each conversation to restore context before doing any work.
@@ -13,6 +41,19 @@ At the start of every new session, the AI assistant should:
   4. Update this file at the end of EVERY session — this is mandatory, not
      optional. Update STATUS, mark COMPLETED items, add new RECOMMENDATIONS,
      and log any decisions made in the NOTES section.
+
+AI ROLE IN THIS PROJECT
+------------------------
+This is a ChatGPT-generated project. The AI's role is:
+  - VALIDATE: review code for correctness, consistency, and best practices
+  - COMMENT: explain findings clearly with context and reasoning
+  - SUGGEST: proactively flag improvements, but never implement them uninvited
+  - DO NOT MODIFY any code or files unless Michiel explicitly asks
+  - Before making any change to any file — including ThirdParty.txt itself —
+    the AI must tell Michiel what it intends to add or change and wait for
+    explicit permission before proceeding
+  - PROMPT.txt, DEVLOG.txt, and Notes.txt are ChatGPT's files — do not modify them
+  - ThirdParty.txt is exclusively Claude's file — ChatGPT does not touch it
 
 This file is intentionally plain text so it is easy to diff and git-commit.
 Add new entries at the top of each section; keep history below a "---" line.
@@ -32,7 +73,9 @@ Next session  : resolve go.mod Go version, then run go mod tidy + go build
   PROJECT OVERVIEW
 ================================================================================
 
-S3Manager is a Go CLI tool for managing S3-compatible object storage.
+S3Manager is a Go project evolving from a CLI tool into a server-based web
+application with a browser UI, similar in spirit to S3 Explorer. It manages
+S3-compatible object storage.
 The PowerShell companion (S3-Manager-v2.5.ps1) was retired on 2026-04-12.
 
   Go CLI (main.go + internal/)
@@ -50,6 +93,11 @@ The PowerShell companion (S3-Manager-v2.5.ps1) was retired on 2026-04-12.
                          delete, folder walk, result aggregation.
     main.go            — CLI entry point; flag parsing, env fallback, dispatch.
 
+  Backends (known targets):
+    - StorageGRID  — primary, public endpoint, valid CA cert
+    - ActiveScale  — secondary
+    - MinIO        — local fallback / development
+
 ================================================================================
   THIRD-PARTY DEPENDENCIES  (Go)
 ================================================================================
@@ -63,10 +111,6 @@ is incorrect — they are direct dependencies. Run "go mod tidy" to fix.
   github.com/aws/aws-sdk-go-v2/service/s3    v1.97.3
   github.com/aws/smithy-go                   v1.24.2
   (+ internal AWS SDK support packages — see go.mod for full list)
-
-PowerShell dependencies (auto-installed if missing):
-  AWS.Tools.Common
-  AWS.Tools.S3
 
 ================================================================================
   RECOMMENDATIONS  (open)
@@ -133,6 +177,23 @@ Priority: LOW / FUTURE
 ================================================================================
   NOTES / DECISIONS LOG
 ================================================================================
+
+2026-04-12 — Credential management design decision (discussed on iPad):
+
+  Three options evaluated:
+    Option 1 - Env vars: simple, current approach, no multi-user support
+    Option 2 - SQLite + AES-256-GCM: per-user encrypted credentials,
+               bcrypt passwords, one master key in env var
+    Option 3 - Envelope encryption: per-user keys wrapped by master key
+               (KMS-style), most secure, high complexity
+
+  Decisions:
+    - Start with Option 1
+    - Migrate to Option 2 when multi-user is needed
+    - Option 3 is a long-term possibility
+    - Build in-house using Go standard library only (no Vault etc.)
+    - Migration impact is low: only client.go, credentials.go, main.go
+    - Isolate behind a CredentialProvider interface, defined early
 
 2026-04-12 — This file (ThirdParty.txt) established as persistent project
              context. Owner: Michiel. Updated by AI each session.
