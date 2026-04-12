@@ -2,14 +2,53 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"sync"
 	"time"
+
+	"github.com/aws/smithy-go"
 
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 
 	s3pkg "s3manager/internal/s3"
 )
+
+func isRetryableUploadError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.ErrorCode() {
+		case "SlowDown",
+			"RequestTimeout",
+			"RequestTimeoutException",
+			"Throttling",
+			"ThrottlingException",
+			"TooManyRequestsException",
+			"InternalError",
+			"InternalFailure",
+			"ServiceUnavailable",
+			"RequestExpired",
+			"OperationAborted":
+			return true
+		}
+	}
+
+	return false
+}
 
 func uploadWorker(
 	ctx context.Context,
@@ -20,8 +59,42 @@ func uploadWorker(
 ) {
 	for job := range jobs {
 		fileStart := time.Now()
+		maxAttempts := 3
 
-		uploadResult, err := s3pkg.UploadFile(ctx, client, bucket, job.LocalPath, job.Key)
+		var uploadResult s3pkg.UploadResult
+		var err error
+
+		for attempt := 1; attempt <= maxAttempts; attempt++ {
+			uploadResult, err = s3pkg.UploadFile(ctx, client, bucket, job.LocalPath, job.Key)
+			if err == nil {
+				break
+			}
+
+			if !isRetryableUploadError(err) {
+				break
+			}
+
+			if attempt < maxAttempts {
+				var backoff time.Duration
+				switch attempt {
+				case 1:
+					backoff = 200 * time.Millisecond
+				case 2:
+					backoff = 500 * time.Millisecond
+				default:
+					backoff = 1 * time.Second
+				}
+				select {
+				case <-time.After(backoff):
+				case <-ctx.Done():
+					err = ctx.Err()
+				}
+				if err != nil {
+					break
+				}
+			}
+		}
+
 		if err != nil {
 			results <- UploadFileResult{
 				LocalPath: job.LocalPath,
@@ -63,6 +136,9 @@ func UploadFolder(
 		result.TotalBytes += job.Size
 	}
 
+	completed := 0
+	total := result.TotalFiles
+
 	jobsCh := make(chan UploadJob)
 	resultsCh := make(chan UploadFileResult)
 
@@ -95,6 +171,11 @@ func UploadFolder(
 	}()
 
 	for fileResult := range resultsCh {
+		completed++
+		if total > 0 && (completed%100 == 0 || completed == total) {
+			percent := float64(completed) / float64(total) * 100
+			fmt.Printf("Progress: %d / %d (%.0f%%)\n", completed, total, percent)
+		}
 		if fileResult.Err != nil {
 			result.FailedFiles++
 			result.FailedBytes += fileResult.Bytes

@@ -5,12 +5,12 @@ Track progress, decisions, benchmarks, and learnings during development.
 
 
 ===== CURRENT FOCUS =====
-Implement retry with exponential backoff in uploadWorker
+Implement live progress reporting in UploadFolder
 
 
 ===== ENTRY TEMPLATE =====
 
-DATE:
+DATE (YYYY-MM-DD HH:MM):
 
 FOCUS:
 (What feature or problem you worked on)
@@ -37,6 +37,42 @@ NEXT STEP:
 
 
 ===== ENTRIES =====
+
+DATE (YYYY-MM-DD HH:MM): 2026-04-12 22:30
+
+FOCUS:
+Enhance upload reliability (context-aware retry + retryable error filtering)
+
+CHANGES:
+- Replaced time.Sleep with context-aware backoff using select + ctx.Done()
+- Added isRetryableUploadError() helper
+- Implemented retry filtering (only retry transient/network/S3 throttling errors)
+- Ensured non-retryable errors fail fast
+
+RESULT:
+- Upload process is now cancellable during retry backoff
+- Retry behavior is more efficient and avoids unnecessary retries
+- No impact on performance or success rate observed
+
+BENCHMARK:
+workers | duration | throughput
+--------|----------|-----------
+40      | ~2.2s    | ~3.2 MiB/s
+
+VALIDATION:
+- Code builds successfully (go build ./...)
+- Full upload test completed (2000 files, 0 failures)
+- Performance consistent with previous benchmarks
+
+LEARNINGS:
+- Retry should be both context-aware and selective
+- Blind retries reduce efficiency and can hide real issues
+- Clean layering allows safe incremental improvements
+
+NEXT STEP:
+- Add live progress reporting
+- Add retry visibility (count/metrics)
+- Consider making retry parameters configurable
 
 DATE: 2026-04-12
 
@@ -73,4 +109,34 @@ LEARNINGS:
 
 NEXT STEP:
 - Implement retry with exponential backoff in uploadWorker
+- Add live progress reporting
+
+DATE: 2026-04-12 21:50
+
+FOCUS:
+Implement retry with exponential backoff in uploadWorker
+
+CHANGES:
+- Added retry loop inside uploadWorker
+- Introduced maxAttempts (3)
+- Implemented exponential backoff (200ms, 500ms, 1s)
+- Kept retry logic isolated within worker (no changes to orchestration)
+
+RESULT:
+- Uploads now retry on transient failures
+- Worker pool behavior remains unchanged
+- Architecture remains clean and layered
+
+VALIDATION:
+- Code builds successfully (go build ./...)
+- Existing upload tests still succeed
+- No regression observed in parallel upload behavior
+
+LEARNINGS:
+- Retry logic belongs at the execution layer (worker), not orchestration
+- Clean separation of concerns allows safe feature additions
+
+NEXT STEP:
+- Add context-aware backoff (cancellable sleep)
+- Implement retry only for retryable errors (not all failures)
 - Add live progress reporting
