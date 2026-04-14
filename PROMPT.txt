@@ -1,82 +1,31 @@
-===== S3MANAGER RESUME PROMPT =====
+Current status:
+- Cleanup phase completed
+- CLI contract standardized (single --prefix flag)
+- s3_download_prefix.go removed
+- lister refactored (no stdout in S3 layer)
+- engine layer handles all output
+- ContentType detection added to uploader
+- README.md, Notes.txt, CLI_SPEC.md aligned with implementation
+- Code builds cleanly (go build ./...)
 
-Purpose:
-Use this file to restart a new ChatGPT session with enough context to continue development cleanly and efficiently.
-
-How to use:
-1. Open this file.
-2. Copy everything from "S3Manager Project – Resume Context" down to the end.
-3. Paste it into a new ChatGPT session.
-4. Then type: continue
-
-Advice for future sessions:
-- Keep this file focused on current technical context and next step.
-- Do not turn this into a giant project diary; use DEVLOG.txt for history.
-- Do not store one-off shell output here unless it matters for future reasoning.
-- Update this file when the current focus changes significantly.
-- Keep Notes.txt for commands and environment setup.
-- Keep DEVLOG.txt for benchmarks, decisions, and learnings.
-- If a future chat starts going off-track, paste this file again and restate the current goal.
-
-Suggested project file roles:
-- Notes.txt = operational notes, commands, environment, test dataset commands
-- DEVLOG.txt = progress history, benchmarks, decisions, learnings, next steps
-- PROMPT.txt = clean resume context for a new AI session
-
-S3Manager Project – Resume Context
-
-I am working on a Go-based CLI tool called S3Manager.
-
-Architecture:
+Current architecture (validated):
 - main -> CLI / argument parsing / user-facing output
 - engine -> orchestration, worker pool logic, aggregation
 - internal/s3 -> low-level S3 operations
 
-Project goals:
-- Build a clean, professional S3-compatible CLI tool
-- Learn Go properly while building something real
-- Keep architecture clean and easy to extend
-- Prefer step-by-step development over large rewrites
-
-Current status:
-- upload-folder is implemented using a worker pool
-- discovery and execution are separated
-- throughput reporting was added to the summary output
-- worker count is configurable with --workers
-- real-world performance testing was done successfully
-- current upload-folder implementation is working correctly
-- upload pipeline now includes retry, context-aware backoff, retry filtering, progress reporting, and retry visibility
-
-Current upload architecture:
-- internal/engine/upload_types.go
-  - UploadJob
-  - UploadFileResult
-  - UploadFolderResult
-- internal/engine/upload_jobs.go
-  - BuildUploadJobs(...)
-- internal/engine/upload.go
-  - uploadWorker(...)
-  - UploadFolder(...)
-  - PrintUploadFolderResult(...)
-- internal/s3/uploader.go
-  - UploadFile(...)
-
-Current design rules:
+Design rules (enforced):
 - Workers do NOT print
 - Workers do NOT aggregate
 - Engine aggregates results
 - S3 layer only performs low-level S3 work
-- Keep separation between discovery, execution, and presentation
-- Continue step-by-step unless explicitly asked for a larger jump
+- Separation between discovery, execution, and presentation
 
 Environment setup:
 source ~/.s3manager-env
 
 Known test dataset:
 - Folder: ~/s3manager-test/temp-8155-uploadset
-- Approximately 2000 files
-- Approximately 7.6 MiB uploaded data
-- Nested folder structure
+- ~2000 files (~7.6 MiB)
 
 Typical test command:
 go run . \
@@ -86,55 +35,35 @@ go run . \
   --workers 40 \
   --prefix "TF-40/"
 
-Observed benchmark results:
-- workers=1   -> ~92s
-- workers=8   -> ~9.5s
-- workers=16  -> ~7.33s
-- workers=32  -> ~2.95s
-- workers=40  -> ~2.15s, throughput ~3.41 MiB/s
-- workers=50  -> ~1.84s to ~1.94s
-- workers=64  -> ~3.73s
-- workers=100 -> ~2.43s
-- workers=200 -> ~2.79s
-
 Benchmark conclusion:
-- Upload workload is I/O bound
-- Parallelism improved performance dramatically
-- Current sweet spot appears to be roughly 40-60 workers for this test set and environment
-- More workers is not always better
+- Workload is I/O bound
+- Optimal worker range ~40–60
+- Parallelism is effective but saturates
 
 Last completed milestone:
-- Implemented parallel upload-folder with worker pool
-- Added throughput to upload summary
-- Committed and pushed changes to GitHub
-- Commit message used: Add parallel upload-folder engine with worker pool
+- Completed full cleanup phase
+- Aligned CLI, architecture, and documentation
+- Established CLI_SPEC.md as source of truth
 
-Current recommended next step:
-Implement retry with exponential backoff inside uploadWorker.
+Current focus:
+Delete engine redesign for large-scale S3 operations
 
-Requirements for next step:
-- Keep the current architecture clean
-- Continue training-style, step-by-step
-- Do not dump a full solution unless explicitly asked
-- Retry failed uploads in uploadWorker
-- Start with a simple version first
-- Suggested retry shape:
-  - 3 to 5 attempts
-  - backoff such as 200ms -> 500ms -> 1s
-- Prefer a clean structure that can later evolve to smarter retryable/non-retryable error handling
+Next step:
+- Review current delete implementation
+- Redesign into streaming pipeline
+- Implement batch deletes using DeleteObjects (up to 1000 objects per request)
+- Introduce backpressure (bounded channels)
+- Maintain dry-run safety and prefix protection
 
-After retry, likely next improvements:
-- live progress reporting
-- cleaner presentation separation between engine and main
-- smarter default worker count
-- optional benchmark mode
+Design target for delete pipeline:
+- Lister → batch builder → worker pool → S3 delete → result aggregation
+- No full in-memory buffering of all objects
 
 Instructions for ChatGPT in the next session:
-- Read this context and continue from here
 - Stay focused on S3Manager
 - Use the existing architecture, do not redesign unnecessarily
-- Teach step-by-step because this is also a learning project
-- Prefer explanation + small implementation steps
-- Be careful not to overwrite Notes.txt or DEVLOG.txt when editing prompt-related files
+- Guide step-by-step
+- Focus on delete engine redesign only
+- Avoid unrelated optimizations or feature expansions
 
-Start by helping me implement retry with exponential backoff in uploadWorker, step by step.
+Start by helping me review and analyze the current delete implementation in internal/engine/delete.go.

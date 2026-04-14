@@ -62,6 +62,41 @@ NEXT STEP:
 
 ===== ENTRIES =====
 
+DATE (YYYY-MM-DD HH:MM): 2026-04-14
+
+FOCUS:
+Cleanup phase completion and CLI alignment
+
+CHANGES:
+- Removed redundant s3_download_prefix.go
+- Refactored lister: moved output from s3 layer to engine layer
+- Added ContentType detection to uploader
+- Standardized CLI flag: --prefix (removed --key-prefix)
+- Fixed README.md usage examples
+- Fixed Notes.txt commands
+- Introduced CLI_SPEC.md as source of truth
+
+RESULT:
+- Clean, consistent CLI interface
+- Architecture aligned with design principles
+- Documentation matches implementation
+- Safe operational defaults (dry-run, explicit root delete)
+
+VALIDATION:
+- go build ./... succeeds
+- CLI commands tested (upload, list, download-prefix, delete dry-run)
+
+LEARNINGS:
+- CLI contract must be defined before documentation
+- Separation of concerns simplifies refactoring
+- Small inconsistencies cause large confusion over time
+
+NEXT STEP:
+- Redesign delete engine for large-scale buckets (streaming + batching)
+
+
+
+
 DATE (YYYY-MM-DD HH:MM): 2026-04-12 23:05
 
 FOCUS:

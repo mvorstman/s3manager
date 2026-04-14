@@ -2,29 +2,57 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
-	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	smithy "github.com/aws/smithy-go"
 )
 
 const MaxDeleteBatchSize = 1000
 
 type DeleteResult struct {
-	Bucket      string
-	Prefix      string
-	DryRun      bool
-	ListedPages int
-	Queued      int64
-	Deleted     int64
-	Failed      int64
-	BatchCalls  int64
-	Duration    time.Duration
+	Bucket           string
+	Prefix           string
+	DryRun           bool
+	ListedPages      int
+	Queued           int64
+	Deleted          int64
+	Failed           int64
+	BatchCalls       int64
+	TotalRetries     int64
+	BatchesWithRetry int64
+	Duration         time.Duration
+}
+
+type DeleteBatchJob struct {
+	BatchID int64
+	Objects []types.ObjectIdentifier
+}
+
+type DeleteBatchResult struct {
+	BatchID       int64
+	WorkerID      int
+	Requested     int
+	DeletedKeys   []string
+	FailedDetails []DeleteObjectFailure
+	Retries       int
+	Err           error
+}
+
+type DeleteObjectFailure struct {
+	Key     string
+	Code    string
+	Message string
 }
 
 func DeletePrefix(
@@ -36,6 +64,7 @@ func DeletePrefix(
 	workers int,
 	verbose bool,
 	allowEmptyPrefix bool,
+	batchSize int,
 ) (DeleteResult, error) {
 	if prefix == "" && !allowEmptyPrefix {
 		return DeleteResult{}, fmt.Errorf("for delete, --prefix is required unless --allow-empty-prefix-delete=true is set")
@@ -45,6 +74,12 @@ func DeletePrefix(
 	}
 	if maxKeys < 1 {
 		maxKeys = 1000
+	}
+	if batchSize < 1 {
+		batchSize = MaxDeleteBatchSize
+	}
+	if batchSize > MaxDeleteBatchSize {
+		batchSize = MaxDeleteBatchSize
 	}
 
 	start := time.Now()
@@ -61,34 +96,13 @@ func DeletePrefix(
 	var deleted int64
 	var failed int64
 	var batchCalls int64
+	var totalRetries int64
+	var batchesWithRetry int64
 
 	if dryRun {
-		var continuationToken *string
-		for {
-			result.ListedPages++
-
-			resp, err := client.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{
-				Bucket:            aws.String(bucket),
-				Prefix:            aws.String(prefix),
-				ContinuationToken: continuationToken,
-				MaxKeys:           aws.Int32(maxKeys),
-			})
-			if err != nil {
-				return result, fmt.Errorf("list objects for dry-run failed on page %d: %w", result.ListedPages, err)
-			}
-
-			for _, obj := range resp.Contents {
-				atomic.AddInt64(&queued, 1)
-				if verbose {
-					key := strings.TrimRight(aws.ToString(obj.Key), "\x00")
-					fmt.Printf("DRY-RUN would delete %s\t%d\n", key, aws.ToInt64(obj.Size))
-				}
-			}
-
-			if !aws.ToBool(resp.IsTruncated) {
-				break
-			}
-			continuationToken = resp.NextContinuationToken
+		err := runDeleteDryRun(ctx, client, bucket, prefix, maxKeys, verbose, &result, &queued)
+		if err != nil {
+			return result, err
 		}
 
 		result.Queued = atomic.LoadInt64(&queued)
@@ -96,79 +110,39 @@ func DeletePrefix(
 		return result, nil
 	}
 
-	jobs := make(chan []types.ObjectIdentifier, workers*2)
-	errCh := make(chan error, workers+1)
+	jobs := make(chan DeleteBatchJob, workers*2)
+	resultsCh := make(chan DeleteBatchResult, workers*2)
+	errCh := make(chan error, 1)
 
-	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func(workerID int) {
-			defer wg.Done()
+	var workerWG sync.WaitGroup
+	startDeleteWorkers(
+		ctx,
+		cancel,
+		client,
+		bucket,
+		workers,
+		verbose,
+		jobs,
+		resultsCh,
+		&workerWG,
+	)
 
-			for batch := range jobs {
-				if ctx.Err() != nil {
-					return
-				}
+	var collectorWG sync.WaitGroup
+	startDeleteResultCollector(
+		resultsCh,
+		errCh,
+		verbose,
+		&deleted,
+		&failed,
+		&batchCalls,
+		&totalRetries,
+		&batchesWithRetry,
+		&collectorWG,
+	)
 
-				resp, err := client.DeleteObjects(ctx, &awss3.DeleteObjectsInput{
-					Bucket: aws.String(bucket),
-					Delete: &types.Delete{
-						Objects: batch,
-						Quiet:   aws.Bool(!verbose),
-					},
-				})
-				if err != nil {
-					select {
-					case errCh <- fmt.Errorf("delete batch failed in worker %d: %w", workerID, err):
-					default:
-					}
-					cancel()
-					return
-				}
-
-				atomic.AddInt64(&batchCalls, 1)
-
-				deletedCount := int64(len(resp.Deleted))
-				failedCount := int64(len(resp.Errors))
-				if deletedCount == 0 && failedCount == 0 {
-					deletedCount = int64(len(batch))
-				}
-
-				atomic.AddInt64(&deleted, deletedCount)
-				atomic.AddInt64(&failed, failedCount)
-
-				if verbose {
-					for _, obj := range resp.Deleted {
-						fmt.Printf("Deleted %s\n", aws.ToString(obj.Key))
-					}
-					for _, delErr := range resp.Errors {
-						fmt.Printf("Delete failed for %s: %s\n", aws.ToString(delErr.Key), aws.ToString(delErr.Message))
-					}
-				}
-			}
-		}(i + 1)
-	}
-
+	var nextBatchID int64
 	var continuationToken *string
-	batch := make([]types.ObjectIdentifier, 0, MaxDeleteBatchSize)
-
-	flushBatch := func() error {
-		if len(batch) == 0 {
-			return nil
-		}
-		out := make([]types.ObjectIdentifier, len(batch))
-		copy(out, batch)
-
-		select {
-		case jobs <- out:
-			batch = batch[:0]
-			return nil
-		case err := <-errCh:
-			return err
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
+	batch := make([]types.ObjectIdentifier, 0, batchSize)
 
 	for {
 		result.ListedPages++
@@ -181,7 +155,9 @@ func DeletePrefix(
 		})
 		if err != nil {
 			close(jobs)
-			wg.Wait()
+			workerWG.Wait()
+			close(resultsCh)
+			collectorWG.Wait()
 			return result, fmt.Errorf("list objects for delete failed on page %d: %w", result.ListedPages, err)
 		}
 
@@ -189,16 +165,20 @@ func DeletePrefix(
 			atomic.AddInt64(&queued, 1)
 
 			if verbose {
-			key := strings.TrimRight(aws.ToString(obj.Key), "\x00")
-			fmt.Printf("Queue delete %s\t%d\n", key, aws.ToInt64(obj.Size))
+				key := strings.TrimRight(aws.ToString(obj.Key), "\x00")
+				fmt.Printf("Queue delete %s\t%d\n", key, aws.ToInt64(obj.Size))
 			}
 
 			batch = append(batch, types.ObjectIdentifier{Key: obj.Key})
-			if len(batch) == MaxDeleteBatchSize {
-				if err := flushBatch(); err != nil {
+			if len(batch) == batchSize {
+				var flushErr error
+				batch, flushErr = flushDeleteBatch(ctx, jobs, errCh, batch, &nextBatchID)
+				if flushErr != nil {
 					close(jobs)
-					wg.Wait()
-					return result, err
+					workerWG.Wait()
+					close(resultsCh)
+					collectorWG.Wait()
+					return result, flushErr
 				}
 			}
 		}
@@ -209,14 +189,20 @@ func DeletePrefix(
 		continuationToken = resp.NextContinuationToken
 	}
 
-	if err := flushBatch(); err != nil {
+	var flushErr error
+	batch, flushErr = flushDeleteBatch(ctx, jobs, errCh, batch, &nextBatchID)
+	if flushErr != nil {
 		close(jobs)
-		wg.Wait()
-		return result, err
+		workerWG.Wait()
+		close(resultsCh)
+		collectorWG.Wait()
+		return result, flushErr
 	}
 
 	close(jobs)
-	wg.Wait()
+	workerWG.Wait()
+	close(resultsCh)
+	collectorWG.Wait()
 
 	select {
 	case err := <-errCh:
@@ -228,8 +214,339 @@ func DeletePrefix(
 	result.Deleted = atomic.LoadInt64(&deleted)
 	result.Failed = atomic.LoadInt64(&failed)
 	result.BatchCalls = atomic.LoadInt64(&batchCalls)
+	result.TotalRetries = atomic.LoadInt64(&totalRetries)
+	result.BatchesWithRetry = atomic.LoadInt64(&batchesWithRetry)
 	result.Duration = time.Since(start)
 	return result, nil
+}
+
+func runDeleteDryRun(
+	ctx context.Context,
+	client *awss3.Client,
+	bucket, prefix string,
+	maxKeys int32,
+	verbose bool,
+	result *DeleteResult,
+	queued *int64,
+) error {
+	var continuationToken *string
+
+	for {
+		result.ListedPages++
+
+		resp, err := client.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{
+			Bucket:            aws.String(bucket),
+			Prefix:            aws.String(prefix),
+			ContinuationToken: continuationToken,
+			MaxKeys:           aws.Int32(maxKeys),
+		})
+		if err != nil {
+			return fmt.Errorf("list objects for dry-run failed on page %d: %w", result.ListedPages, err)
+		}
+
+		for _, obj := range resp.Contents {
+			atomic.AddInt64(queued, 1)
+
+			if verbose {
+				key := strings.TrimRight(aws.ToString(obj.Key), "\x00")
+				fmt.Printf("DRY-RUN would delete %s\t%d\n", key, aws.ToInt64(obj.Size))
+			}
+		}
+
+		if !aws.ToBool(resp.IsTruncated) {
+			break
+		}
+		continuationToken = resp.NextContinuationToken
+	}
+
+	return nil
+}
+
+func startDeleteWorkers(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	client *awss3.Client,
+	bucket string,
+	workers int,
+	verbose bool,
+	jobs <-chan DeleteBatchJob,
+	resultsCh chan<- DeleteBatchResult,
+	wg *sync.WaitGroup,
+) {
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+
+		go func(workerID int) {
+			defer wg.Done()
+
+			for job := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
+
+				batchResult := deleteWorker(ctx, client, bucket, verbose, workerID, job)
+
+				select {
+				case resultsCh <- batchResult:
+				case <-ctx.Done():
+					return
+				}
+
+				if batchResult.Err != nil {
+					cancel()
+					return
+				}
+			}
+		}(i + 1)
+	}
+}
+
+func deleteWorker(
+	ctx context.Context,
+	client *awss3.Client,
+	bucket string,
+	verbose bool,
+	workerID int,
+	job DeleteBatchJob,
+) DeleteBatchResult {
+	backoffs := []time.Duration{
+		200 * time.Millisecond,
+		500 * time.Millisecond,
+		1 * time.Second,
+	}
+
+	var lastErr error
+	retries := 0
+
+	for attempt := 1; attempt <= len(backoffs)+1; attempt++ {
+		resp, err := client.DeleteObjects(ctx, &awss3.DeleteObjectsInput{
+			Bucket: aws.String(bucket),
+			Delete: &types.Delete{
+				Objects: job.Objects,
+				Quiet:   aws.Bool(!verbose),
+			},
+		})
+		if err == nil {
+			result := DeleteBatchResult{
+				BatchID:   job.BatchID,
+				WorkerID:  workerID,
+				Requested: len(job.Objects),
+				Retries:   retries,
+			}
+
+			for _, obj := range resp.Deleted {
+				result.DeletedKeys = append(result.DeletedKeys, aws.ToString(obj.Key))
+			}
+
+			for _, delErr := range resp.Errors {
+				result.FailedDetails = append(result.FailedDetails, DeleteObjectFailure{
+					Key:     aws.ToString(delErr.Key),
+					Code:    aws.ToString(delErr.Code),
+					Message: aws.ToString(delErr.Message),
+				})
+			}
+
+			if len(result.DeletedKeys) == 0 && len(result.FailedDetails) == 0 {
+				for _, obj := range job.Objects {
+					result.DeletedKeys = append(result.DeletedKeys, aws.ToString(obj.Key))
+				}
+			}
+
+			return result
+		}
+
+		lastErr = err
+
+		if ctx.Err() != nil {
+			return DeleteBatchResult{
+				BatchID:   job.BatchID,
+				WorkerID:  workerID,
+				Requested: len(job.Objects),
+				Retries:   retries,
+				Err:       ctx.Err(),
+			}
+		}
+
+		if attempt > len(backoffs) || !isRetryableDeleteError(err) {
+			break
+		}
+
+		retries++
+
+		select {
+		case <-time.After(backoffs[attempt-1]):
+		case <-ctx.Done():
+			return DeleteBatchResult{
+				BatchID:   job.BatchID,
+				WorkerID:  workerID,
+				Requested: len(job.Objects),
+				Retries:   retries,
+				Err:       ctx.Err(),
+			}
+		}
+	}
+
+	return DeleteBatchResult{
+		BatchID:   job.BatchID,
+		WorkerID:  workerID,
+		Requested: len(job.Objects),
+		Retries:   retries,
+		Err:       fmt.Errorf("delete batch failed in worker %d after %d attempt(s): %w", workerID, retries+1, lastErr),
+	}
+}
+
+func isRetryableDeleteError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return true
+	}
+
+	if errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ETIMEDOUT) {
+		return true
+	}
+
+	var respErr *awshttp.ResponseError
+	if errors.As(err, &respErr) {
+		return true
+	}
+
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		code := apiErr.ErrorCode()
+		switch code {
+		case "SlowDown",
+			"Throttling",
+			"ThrottlingException",
+			"RequestTimeout",
+			"RequestTimeoutException",
+			"InternalError",
+			"InternalServerError",
+			"ServiceUnavailable",
+			"503",
+			"500":
+			return true
+		}
+	}
+
+	msg := strings.ToLower(err.Error())
+	retryHints := []string{
+		"timeout",
+		"timed out",
+		"connection reset",
+		"connection refused",
+		"broken pipe",
+		"temporary",
+		"temporarily unavailable",
+		"throttle",
+		"slowdown",
+		"service unavailable",
+		"internal error",
+	}
+
+	for _, hint := range retryHints {
+		if strings.Contains(msg, hint) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func startDeleteResultCollector(
+	resultsCh <-chan DeleteBatchResult,
+	errCh chan<- error,
+	verbose bool,
+	deleted *int64,
+	failed *int64,
+	batchCalls *int64,
+	totalRetries *int64,
+	batchesWithRetry *int64,
+	wg *sync.WaitGroup,
+) {
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+
+		for batchResult := range resultsCh {
+			if batchResult.Err != nil {
+				select {
+				case errCh <- batchResult.Err:
+				default:
+				}
+				continue
+			}
+
+			atomic.AddInt64(batchCalls, 1)
+			atomic.AddInt64(deleted, int64(len(batchResult.DeletedKeys)))
+			atomic.AddInt64(failed, int64(len(batchResult.FailedDetails)))
+			atomic.AddInt64(totalRetries, int64(batchResult.Retries))
+			if batchResult.Retries > 0 {
+				atomic.AddInt64(batchesWithRetry, 1)
+			}
+
+			if verbose {
+				fmt.Printf(
+					"[worker %02d] completed batch=%d requested=%d deleted=%d failed=%d retries=%d\n",
+					batchResult.WorkerID,
+					batchResult.BatchID,
+					batchResult.Requested,
+					len(batchResult.DeletedKeys),
+					len(batchResult.FailedDetails),
+					batchResult.Retries,
+				)
+
+				for _, failure := range batchResult.FailedDetails {
+					fmt.Printf(
+						"[worker %02d] delete failed batch=%d key=%s code=%s message=%s\n",
+						batchResult.WorkerID,
+						batchResult.BatchID,
+						failure.Key,
+						failure.Code,
+						failure.Message,
+					)
+				}
+			}
+		}
+	}()
+}
+
+func flushDeleteBatch(
+	ctx context.Context,
+	jobs chan<- DeleteBatchJob,
+	errCh <-chan error,
+	batch []types.ObjectIdentifier,
+	nextBatchID *int64,
+) ([]types.ObjectIdentifier, error) {
+	if len(batch) == 0 {
+		return batch, nil
+	}
+
+	out := make([]types.ObjectIdentifier, len(batch))
+	copy(out, batch)
+
+	job := DeleteBatchJob{
+		BatchID: atomic.AddInt64(nextBatchID, 1),
+		Objects: out,
+	}
+
+	select {
+	case jobs <- job:
+		return batch[:0], nil
+	case err := <-errCh:
+		return batch, err
+	case <-ctx.Done():
+		return batch, ctx.Err()
+	}
 }
 
 func PrintDeleteResult(result DeleteResult) {
@@ -245,6 +562,8 @@ func PrintDeleteResult(result DeleteResult) {
 		fmt.Printf("  Batch calls: %d\n", result.BatchCalls)
 		fmt.Printf("  Deleted: %d\n", result.Deleted)
 		fmt.Printf("  Failed: %d\n", result.Failed)
+		fmt.Printf("  Batches with retries: %d\n", result.BatchesWithRetry)
+		fmt.Printf("  Total retries: %d\n", result.TotalRetries)
 	}
 	fmt.Printf("  Duration: %s\n", result.Duration.Round(time.Millisecond))
 }

@@ -9,11 +9,17 @@ import (
 	s3pkg "s3manager/internal/s3"
 )
 
+type ListedObject struct {
+	Key  string
+	Size int64
+}
+
 type ListResult struct {
 	Bucket       string
 	Prefix       string
 	Pages        int
 	TotalObjects int
+	Objects      []ListedObject
 }
 
 func ListObjects(
@@ -27,15 +33,29 @@ func ListObjects(
 		return ListResult{}, err
 	}
 
+	objects := make([]ListedObject, 0, len(s3Result.Objects))
+	for _, obj := range s3Result.Objects {
+		objects = append(objects, ListedObject{
+			Key:  obj.Key,
+			Size: obj.Size,
+		})
+	}
+
 	return ListResult{
 		Bucket:       bucket,
 		Prefix:       prefix,
 		Pages:        s3Result.Pages,
 		TotalObjects: s3Result.TotalObjects,
+		Objects:      objects,
 	}, nil
 }
 
 func PrintListResult(result ListResult) {
+	for _, obj := range result.Objects {
+		fmt.Printf("%s\t%d\n", obj.Key, obj.Size)
+	}
+	fmt.Println()
+
 	fmt.Println("List summary")
 	fmt.Printf("  Bucket: %s\n", result.Bucket)
 	fmt.Printf("  Prefix: %s\n", result.Prefix)

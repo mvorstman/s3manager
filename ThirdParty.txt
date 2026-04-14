@@ -62,12 +62,12 @@ Add new entries at the top of each section; keep history below a "---" line.
   STATUS  (update this block every session)
 ================================================================================
 
-Last reviewed : 2026-04-12
+Last reviewed : 2026-04-13
 Current version: v0.2.0  (main.go) — Go CLI only; PowerShell companion retired
-Build state   : compiles (main.go present and wired); go.mod version invalid
-Open items    : see RECOMMENDATIONS below
-Next session  : resolve go.mod Go version, then run go mod tidy + go build
-                commit deletion of S3-Manager-v2.5.ps1 + generate-test-files.ps1
+Build state   : builds and runs successfully
+New files     : ARCHITECTURE.md, s3_download_prefix.go
+Open items    : see RECOMMENDATIONS below — items [13][14] are open
+Next session  : fix panic(err) [13] and remove redundant wrapper [14]
 
 ================================================================================
   PROJECT OVERVIEW
@@ -102,8 +102,8 @@ The PowerShell companion (S3-Manager-v2.5.ps1) was retired on 2026-04-12.
   THIRD-PARTY DEPENDENCIES  (Go)
 ================================================================================
 
-All declared in go.mod. As of last review, all are marked "// indirect" which
-is incorrect — they are direct dependencies. Run "go mod tidy" to fix.
+All declared in go.mod. Dependencies verified and cleaned via go mod tidy
+(2026-04-13). Format and indirect tagging are correct.
 
   github.com/aws/aws-sdk-go-v2               v1.41.5
   github.com/aws/aws-sdk-go-v2/config        v1.32.13
@@ -118,13 +118,10 @@ is incorrect — they are direct dependencies. Run "go mod tidy" to fix.
 
 Priority: HIGH
 --------------
-[1] go.mod specifies "go 1.26.1" — this version does not exist.
-    Fix: change to "go 1.22.0" (or whichever version is installed locally).
-    Then run: go mod tidy && go build ./...
+[1] RESOLVED 2026-04-13 — go.mod Go version format is correct (go 1.26,
+    major.minor only is valid). Project builds and runs successfully.
 
-[2] All go.mod dependencies are tagged "// indirect".
-    Direct dependencies should not carry that comment.
-    Fix: run "go mod tidy" after fixing the Go version above.
+[2] RESOLVED 2026-04-13 — go mod tidy completed; dependencies are now correct.
 
 Priority: MEDIUM
 ----------------
@@ -146,6 +143,27 @@ Priority: MEDIUM
     Fix: detect MIME type from extension (mime.TypeByExtension) or accept it
     as an optional parameter.
 
+Priority: HIGH (new — 2026-04-13)
+----------------------------------
+[11] RESOLVED 2026-04-13 — Retry IS implemented, but in engine/upload.go
+     (uploadWorker), not in uploader.go. Implementation is solid: 3 attempts,
+     smart retryable error detection (network errors, S3 throttling codes),
+     backoff 200ms → 500ms → 1s, context-aware. TotalRetries and
+     FilesWithRetries fields added to UploadFolderResult and summary output.
+     Progress reporting is also implemented (every 100 files). Original
+     review was correct about location but wrong about feature being absent.
+
+[12] RESOLVED 2026-04-13 — README corrected; progress reporting no longer
+     listed under both Implemented and Planned.
+
+[13] s3_download_prefix.go uses panic(err) for error handling. Should be
+     log.Fatalf or a proper error return. Panics are not appropriate for
+     expected runtime failures like network errors.
+
+[14] s3_download_prefix.go is redundant — main.go already calls
+     enginepkg.DownloadPrefix directly (line 131). This wrapper adds nothing
+     and creates two code paths for the same action. Should be removed.
+
 Priority: LOW / FUTURE
 -----------------------
 [7] upload_jobs.go uses filepath.Walk; prefer filepath.WalkDir (Go 1.16+)
@@ -160,13 +178,24 @@ Priority: LOW / FUTURE
     Suggested starting point: table-driven tests for BuildUploadJobs and
     localPathForObject (both are pure functions with no S3 dependency).
 
-[10] ThirdPary.txt (typo — missing 'd') exists as an empty duplicate.
-     Safe to delete.
+[10] RESOLVED 2026-04-13 — ThirdPary.txt (typo duplicate) has been removed.
 
 ================================================================================
   COMPLETED  (most recent first)
 ================================================================================
 
+2026-04-13 — Final sync with ChatGPT: [2] and [12] marked resolved.
+             Only [13] and [14] remain open (s3_download_prefix.go cleanup).
+             ThirdParty.txt now fully in sync with implementation.
+2026-04-13 — ThirdParty.txt corrected following ChatGPT review:
+             - [1] go.mod version marked resolved; project builds successfully
+             - [11] retry implementation confirmed in engine/upload.go; marked resolved
+             - [12] README contradiction still open
+             - [13][14] s3_download_prefix.go issues still open
+2026-04-13 — Reviewed new files: ARCHITECTURE.md, README.md, s3_download_prefix.go.
+             ARCHITECTURE.md is clean and accurate.
+             README.md has factual inconsistencies (see recommendations [11][12]).
+             s3_download_prefix.go has a panic and is redundant (see [13][14]).
 2026-04-12 — Removed S3-Manager-v2.5.ps1 and generate-test-files.ps1.
              Decision: PowerShell companion is retired; Go CLI is the sole
              implementation going forward. Changes are unstaged — commit pending.

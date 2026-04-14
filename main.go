@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 
+	"s3manager/internal/engine"
 	enginepkg "s3manager/internal/engine"
 	s3pkg "s3manager/internal/s3"
 )
@@ -44,11 +45,12 @@ func main() {
 	objectKey := flag.String("key", "", "Object key in S3")
 	filePath := flag.String("file", "", "Local file to upload")
 	folderPath := flag.String("folder", "", "Local folder to upload recursively")
-	keyPrefix := flag.String("key-prefix", "", "Optional S3 key prefix for folder uploads")
 	outputPath := flag.String("out", "", "Local output file path for single-object download")
 	outputDir := flag.String("out-dir", "", "Local output directory for prefix download")
 	dryRun := flag.Bool("dry-run", true, "If true, only show what would be deleted")
 	allowEmptyPrefixDelete := flag.Bool("allow-empty-prefix-delete", false, "Allow delete to operate on the bucket root when --prefix is empty")
+	batchSize := flag.Int("batch-size", 1000, "number of objects per delete batch (max 1000)")
+
 	flag.Parse()
 
 	endpointValue := flagOrEnv(*endpoint, "S3_ENDPOINT")
@@ -108,7 +110,7 @@ func main() {
 		if *folderPath == "" {
 			log.Fatal("for upload-folder, --folder is required")
 		}
-		result, err := enginepkg.UploadFolder(ctx, client, *bucket, *folderPath, *keyPrefix, *workers, *verbose)
+		result, err := enginepkg.UploadFolder(ctx, client, *bucket, *folderPath, *prefix, *workers, *verbose)
 		if err != nil {
 			log.Fatalf("upload-folder failed: %v", err)
 		}
@@ -145,15 +147,22 @@ func main() {
 		s3pkg.PrintHeadResult(result)
 
 	case "delete":
-		if *prefix == "" && !*allowEmptyPrefixDelete {
-			log.Fatal("for delete at bucket root, set --allow-empty-prefix-delete=true")
-		}
-
-		result, err := enginepkg.DeletePrefix(ctx, client, *bucket, *prefix, int32(*maxKeys), *dryRun, *workers, *verbose, *allowEmptyPrefixDelete)
+		result, err := engine.DeletePrefix(
+			ctx,
+			client,
+			*bucket,
+			*prefix,
+			int32(*maxKeys),
+			*dryRun,
+			*workers,
+			*verbose,
+			*allowEmptyPrefixDelete,
+			*batchSize,
+		)
 		if err != nil {
-			log.Fatalf("delete failed: %v", err)
+			log.Fatal(err)
 		}
-		enginepkg.PrintDeleteResult(result)
+		engine.PrintDeleteResult(result)
 
 	default:
 		log.Fatalf("unknown action: %s", *action)

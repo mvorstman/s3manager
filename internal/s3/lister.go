@@ -9,13 +9,19 @@ import (
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
+type ObjectInfo struct {
+	Key  string
+	Size int64
+}
+
 // ListResult contains the aggregated outcome of a list operation.
 type ListResult struct {
 	Pages        int
 	TotalObjects int
+	Objects      []ObjectInfo
 }
 
-// ListObjects lists all matching objects and writes human-readable output to stdout.
+// ListObjects lists all matching objects and returns structured data.
 func ListObjects(ctx context.Context, client *awss3.Client, bucket, prefix string, maxKeys int32) (ListResult, error) {
 	var continuationToken *string
 	result := ListResult{}
@@ -35,16 +41,14 @@ func ListObjects(ctx context.Context, client *awss3.Client, bucket, prefix strin
 			return result, fmt.Errorf("list objects failed on page %d: %w", result.Pages, err)
 		}
 
-		fmt.Printf("Page %d\n", result.Pages)
-		fmt.Printf("  KeyCount: %d\n", aws.ToInt32(resp.KeyCount))
-		fmt.Printf("  MaxKeys: %d\n", maxKeys)
-		fmt.Printf("  IsTruncated: %v\n", aws.ToBool(resp.IsTruncated))
-
-	for _, obj := range resp.Contents {
-		result.TotalObjects++
-		key := strings.TrimRight(aws.ToString(obj.Key), "\x00")
-		fmt.Printf("%s\t%d\n", key, aws.ToInt64(obj.Size))
-}
+		for _, obj := range resp.Contents {
+			result.TotalObjects++
+			key := strings.TrimRight(aws.ToString(obj.Key), "\x00")
+			result.Objects = append(result.Objects, ObjectInfo{
+				Key:  key,
+				Size: aws.ToInt64(obj.Size),
+			})
+		}
 
 		if !aws.ToBool(resp.IsTruncated) {
 			break
@@ -53,6 +57,5 @@ func ListObjects(ctx context.Context, client *awss3.Client, bucket, prefix strin
 		continuationToken = resp.NextContinuationToken
 	}
 
-	fmt.Printf("\nDone. Total objects listed: %d\n", result.TotalObjects)
 	return result, nil
 }

@@ -1,3 +1,5 @@
+
+
 # S3Manager
 
 S3Manager is a Go-based CLI tool for managing S3-compatible object storage systems such as StorageGRID, ActiveScale, and MinIO.
@@ -34,8 +36,8 @@ Status: Stable CLI with parallel operations
 
 ### Planned
 
-- Live progress reporting
-- Dry-run improvements
+- Live progress reporting improvements
+- Dry-run enhancements
 - Smarter worker scaling
 
 ---
@@ -97,7 +99,7 @@ go run . \
   --action upload-folder \
   --bucket temp-8155 \
   --folder ./data \
-  --key-prefix "test/" \
+  --prefix "test/" \
   --workers 40
 ```
 
@@ -117,17 +119,19 @@ go run . \
   --action download-prefix \
   --bucket temp-8155 \
   --prefix "test/" \
-  --out-dir ./download
+  --out-dir ./download \
+  --workers 40
 ```
 
-### Delete by prefix
+### Delete by prefix (safe)
 
 ```bash
 go run . \
   --action delete \
   --bucket temp-8155 \
   --prefix "test/" \
-  --workers 40
+  --workers 40 \
+  --dry-run=true
 ```
 
 ### Delete entire bucket (DANGEROUS)
@@ -158,10 +162,11 @@ Parallel upload benchmark (approximate):
 | 50     | ~1.8s    | ~3.9 MiB/s  |
 | 200    | ~2.7s    | ~2.6 MiB/s  |
 
-Key insight:
+Key insights:
 - Workload is I/O bound
 - Optimal worker range ~40–60
-- Additional metrics: files with retries and total retry attempts
+- More workers ≠ better performance
+- Retry metrics provide visibility into reliability
 
 ---
 

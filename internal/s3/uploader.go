@@ -3,7 +3,9 @@ package s3
 import (
 	"context"
 	"fmt"
+	"mime"
 	"os"
+	"path/filepath"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
@@ -31,10 +33,16 @@ func UploadFile(ctx context.Context, client *awss3.Client, bucket, filePath, obj
 		return UploadResult{}, fmt.Errorf("stat file %s: %w", filePath, err)
 	}
 
+	contentType := mime.TypeByExtension(filepath.Ext(filePath))
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
 	input := &awss3.PutObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(objectKey),
-		Body:   file,
+		Bucket:      aws.String(bucket),
+		Key:         aws.String(objectKey),
+		Body:        file,
+		ContentType: aws.String(contentType),
 	}
 
 	resp, err := client.PutObject(ctx, input)

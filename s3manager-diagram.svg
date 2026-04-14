@@ -1,0 +1,156 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 720" font-family="'Segoe UI', Arial, sans-serif">
+
+  <!-- Background -->
+  <rect width="900" height="720" fill="#0f1117"/>
+
+  <!-- Title -->
+  <text x="450" y="36" text-anchor="middle" fill="#e2e8f0" font-size="18" font-weight="bold">S3Manager — Process Architecture</text>
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- LAYER 1: main.go -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <rect x="60" y="60" width="780" height="70" rx="10" fill="#1e293b" stroke="#38bdf8" stroke-width="1.5"/>
+  <text x="80" y="84" fill="#38bdf8" font-size="11" font-weight="bold">LAYER 1 — CLI ENTRY POINT</text>
+  <rect x="260" y="74" width="380" height="44" rx="8" fill="#0f172a" stroke="#38bdf8" stroke-width="1"/>
+  <text x="450" y="93" text-anchor="middle" fill="#e2e8f0" font-size="13" font-weight="bold">main.go</text>
+  <text x="450" y="109" text-anchor="middle" fill="#94a3b8" font-size="10">Flag parsing · Env fallback · Input validation · Action dispatch</text>
+
+  <!-- Arrow down from main to engine -->
+  <line x1="450" y1="130" x2="450" y2="160" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- LAYER 2: engine -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <rect x="60" y="160" width="780" height="230" rx="10" fill="#1e293b" stroke="#a78bfa" stroke-width="1.5"/>
+  <text x="80" y="184" fill="#a78bfa" font-size="11" font-weight="bold">LAYER 2 — ENGINE (orchestration · worker pools · aggregation)</text>
+
+  <!-- upload.go -->
+  <rect x="80" y="194" width="170" height="180" rx="8" fill="#0f172a" stroke="#a78bfa" stroke-width="1"/>
+  <text x="165" y="214" text-anchor="middle" fill="#c4b5fd" font-size="11" font-weight="bold">upload.go</text>
+  <text x="165" y="230" text-anchor="middle" fill="#94a3b8" font-size="9">upload-folder</text>
+  <rect x="95" y="238" width="140" height="54" rx="5" fill="#1e1b4b" stroke="#6d28d9" stroke-width="1"/>
+  <text x="165" y="254" text-anchor="middle" fill="#a78bfa" font-size="9" font-weight="bold">Worker Pool</text>
+  <text x="165" y="267" text-anchor="middle" fill="#94a3b8" font-size="8">jobsCh → uploadWorker</text>
+  <text x="165" y="279" text-anchor="middle" fill="#94a3b8" font-size="8">resultsCh → aggregate</text>
+  <rect x="95" y="300" width="140" height="42" rx="5" fill="#1e1b4b" stroke="#6d28d9" stroke-width="1"/>
+  <text x="165" y="316" text-anchor="middle" fill="#a78bfa" font-size="9" font-weight="bold">Retry Logic</text>
+  <text x="165" y="329" text-anchor="middle" fill="#94a3b8" font-size="8">3 attempts · 200→500→1000ms</text>
+  <text x="165" y="341" text-anchor="middle" fill="#94a3b8" font-size="8">smart error detection</text>
+  <text x="165" y="358" text-anchor="middle" fill="#64748b" font-size="8">upload_jobs.go · upload_types.go</text>
+
+  <!-- download.go -->
+  <rect x="270" y="194" width="170" height="180" rx="8" fill="#0f172a" stroke="#a78bfa" stroke-width="1"/>
+  <text x="355" y="214" text-anchor="middle" fill="#c4b5fd" font-size="11" font-weight="bold">download.go</text>
+  <text x="355" y="230" text-anchor="middle" fill="#94a3b8" font-size="9">download-prefix</text>
+  <rect x="285" y="238" width="140" height="54" rx="5" fill="#1e1b4b" stroke="#6d28d9" stroke-width="1"/>
+  <text x="355" y="254" text-anchor="middle" fill="#a78bfa" font-size="9" font-weight="bold">Worker Pool</text>
+  <text x="355" y="267" text-anchor="middle" fill="#94a3b8" font-size="8">list → jobsCh</text>
+  <text x="355" y="279" text-anchor="middle" fill="#94a3b8" font-size="8">downloadWorker · aggregate</text>
+  <text x="355" y="310" text-anchor="middle" fill="#94a3b8" font-size="9">Paginated listing</text>
+  <text x="355" y="325" text-anchor="middle" fill="#94a3b8" font-size="8">ctx cancel on hard error</text>
+  <text x="355" y="358" text-anchor="middle" fill="#64748b" font-size="8">localPathForObject()</text>
+
+  <!-- delete.go -->
+  <rect x="460" y="194" width="170" height="180" rx="8" fill="#0f172a" stroke="#a78bfa" stroke-width="1"/>
+  <text x="545" y="214" text-anchor="middle" fill="#c4b5fd" font-size="11" font-weight="bold">delete.go</text>
+  <text x="545" y="230" text-anchor="middle" fill="#94a3b8" font-size="9">delete-prefix</text>
+  <rect x="475" y="238" width="140" height="54" rx="5" fill="#1e1b4b" stroke="#6d28d9" stroke-width="1"/>
+  <text x="545" y="254" text-anchor="middle" fill="#a78bfa" font-size="9" font-weight="bold">Worker Pool</text>
+  <text x="545" y="267" text-anchor="middle" fill="#94a3b8" font-size="8">batch (max 1000 keys)</text>
+  <text x="545" y="279" text-anchor="middle" fill="#94a3b8" font-size="8">ctx cancel on error</text>
+  <text x="545" y="310" text-anchor="middle" fill="#94a3b8" font-size="9">Dry-run mode</text>
+  <text x="545" y="325" text-anchor="middle" fill="#94a3b8" font-size="8">Empty-prefix guard</text>
+  <text x="545" y="358" text-anchor="middle" fill="#64748b" font-size="8">DeleteObjects API (batch)</text>
+
+  <!-- list.go -->
+  <rect x="650" y="194" width="170" height="180" rx="8" fill="#0f172a" stroke="#a78bfa" stroke-width="1"/>
+  <text x="735" y="214" text-anchor="middle" fill="#c4b5fd" font-size="11" font-weight="bold">list.go</text>
+  <text x="735" y="230" text-anchor="middle" fill="#94a3b8" font-size="9">list</text>
+  <text x="735" y="260" text-anchor="middle" fill="#94a3b8" font-size="9">Paginated listing</text>
+  <text x="735" y="276" text-anchor="middle" fill="#94a3b8" font-size="8">ContinuationToken</text>
+  <text x="735" y="292" text-anchor="middle" fill="#94a3b8" font-size="8">MaxKeys configurable</text>
+  <text x="735" y="316" text-anchor="middle" fill="#94a3b8" font-size="9">Wraps s3/lister.go</text>
+  <text x="735" y="358" text-anchor="middle" fill="#64748b" font-size="8">ListObjectsV2</text>
+
+  <!-- Arrow down from engine to s3 -->
+  <line x1="450" y1="390" x2="450" y2="420" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- LAYER 3: internal/s3 -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <rect x="60" y="420" width="780" height="120" rx="10" fill="#1e293b" stroke="#34d399" stroke-width="1.5"/>
+  <text x="80" y="444" fill="#34d399" font-size="11" font-weight="bold">LAYER 3 — S3 PRIMITIVES (stateless · no orchestration · no CLI awareness)</text>
+
+  <!-- client.go -->
+  <rect x="80" y="454" width="130" height="72" rx="7" fill="#0f172a" stroke="#34d399" stroke-width="1"/>
+  <text x="145" y="472" text-anchor="middle" fill="#6ee7b7" font-size="10" font-weight="bold">client.go</text>
+  <text x="145" y="487" text-anchor="middle" fill="#94a3b8" font-size="8">NewClient()</text>
+  <text x="145" y="499" text-anchor="middle" fill="#94a3b8" font-size="8">Retry config</text>
+  <text x="145" y="511" text-anchor="middle" fill="#94a3b8" font-size="8">Credentials · Endpoint</text>
+
+  <!-- uploader.go -->
+  <rect x="225" y="454" width="130" height="72" rx="7" fill="#0f172a" stroke="#34d399" stroke-width="1"/>
+  <text x="290" y="472" text-anchor="middle" fill="#6ee7b7" font-size="10" font-weight="bold">uploader.go</text>
+  <text x="290" y="487" text-anchor="middle" fill="#94a3b8" font-size="8">UploadFile()</text>
+  <text x="290" y="499" text-anchor="middle" fill="#94a3b8" font-size="8">PutObject API</text>
+  <text x="290" y="511" text-anchor="middle" fill="#94a3b8" font-size="8">Returns ETag + size</text>
+
+  <!-- downloader.go -->
+  <rect x="370" y="454" width="130" height="72" rx="7" fill="#0f172a" stroke="#34d399" stroke-width="1"/>
+  <text x="435" y="472" text-anchor="middle" fill="#6ee7b7" font-size="10" font-weight="bold">downloader.go</text>
+  <text x="435" y="487" text-anchor="middle" fill="#94a3b8" font-size="8">DownloadFile()</text>
+  <text x="435" y="499" text-anchor="middle" fill="#94a3b8" font-size="8">GetObject API</text>
+  <text x="435" y="511" text-anchor="middle" fill="#94a3b8" font-size="8">Streams to disk</text>
+
+  <!-- lister.go -->
+  <rect x="515" y="454" width="130" height="72" rx="7" fill="#0f172a" stroke="#34d399" stroke-width="1"/>
+  <text x="580" y="472" text-anchor="middle" fill="#6ee7b7" font-size="10" font-weight="bold">lister.go</text>
+  <text x="580" y="487" text-anchor="middle" fill="#94a3b8" font-size="8">ListObjects()</text>
+  <text x="580" y="499" text-anchor="middle" fill="#94a3b8" font-size="8">ListObjectsV2 API</text>
+  <text x="580" y="511" text-anchor="middle" fill="#f87171" font-size="8">⚠ prints to stdout</text>
+
+  <!-- head.go -->
+  <rect x="660" y="454" width="160" height="72" rx="7" fill="#0f172a" stroke="#34d399" stroke-width="1"/>
+  <text x="740" y="472" text-anchor="middle" fill="#6ee7b7" font-size="10" font-weight="bold">head.go</text>
+  <text x="740" y="487" text-anchor="middle" fill="#94a3b8" font-size="8">HeadObject()</text>
+  <text x="740" y="499" text-anchor="middle" fill="#94a3b8" font-size="8">Object metadata</text>
+  <text x="740" y="511" text-anchor="middle" fill="#94a3b8" font-size="8">Size · ETag · ContentType</text>
+
+  <!-- Arrow down from s3 to backends -->
+  <line x1="450" y1="540" x2="450" y2="570" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- LAYER 4: Backends -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <rect x="60" y="570" width="780" height="90" rx="10" fill="#1e293b" stroke="#fb923c" stroke-width="1.5"/>
+  <text x="80" y="594" fill="#fb923c" font-size="11" font-weight="bold">S3-COMPATIBLE BACKENDS</text>
+
+  <!-- StorageGRID -->
+  <rect x="100" y="604" width="190" height="44" rx="7" fill="#0f172a" stroke="#fb923c" stroke-width="1"/>
+  <text x="195" y="623" text-anchor="middle" fill="#fdba74" font-size="11" font-weight="bold">StorageGRID</text>
+  <text x="195" y="638" text-anchor="middle" fill="#94a3b8" font-size="9">Primary · Public endpoint · Valid CA cert</text>
+
+  <!-- ActiveScale -->
+  <rect x="355" y="604" width="190" height="44" rx="7" fill="#0f172a" stroke="#fb923c" stroke-width="1"/>
+  <text x="450" y="623" text-anchor="middle" fill="#fdba74" font-size="11" font-weight="bold">ActiveScale</text>
+  <text x="450" y="638" text-anchor="middle" fill="#94a3b8" font-size="9">Secondary</text>
+
+  <!-- MinIO -->
+  <rect x="610" y="604" width="190" height="44" rx="7" fill="#0f172a" stroke="#fb923c" stroke-width="1"/>
+  <text x="705" y="623" text-anchor="middle" fill="#fdba74" font-size="11" font-weight="bold">MinIO</text>
+  <text x="705" y="638" text-anchor="middle" fill="#94a3b8" font-size="9">Local fallback / development</text>
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- Legend -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <text x="450" y="690" text-anchor="middle" fill="#f87171" font-size="9">⚠ lister.go prints directly to stdout — open recommendation [5]</text>
+  <text x="450" y="706" text-anchor="middle" fill="#f87171" font-size="9">⚠ s3_download_prefix.go uses panic(err) and is redundant — open recommendations [13][14]</text>
+
+  <!-- Arrow marker -->
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#64748b"/>
+    </marker>
+  </defs>
+
+</svg>
