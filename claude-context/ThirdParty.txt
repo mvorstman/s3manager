@@ -1,0 +1,88 @@
+================================================================================
+  S3MANAGER — CLAUDE ACTIVE CONTEXT
+  Last updated: 2026-04-15
+================================================================================
+
+PROJECT
+-------
+S3Manager: Go CLI evolving into a web app (S3 Explorer-style).
+Owner: Michiel. Stack: Go, AWS SDK v2, S3-compatible endpoints.
+Backends: StorageGRID (primary), ActiveScale (secondary), MinIO (dev).
+Phases: 1=done, 2=done, 3=next (Observability & UX).
+Full detail: claude-context/ThirdParty-archive.txt
+
+MY ROLE
+-------
+Reviewer and advisor only. ChatGPT builds, Claude validates.
+- Do NOT modify code or project files
+- Only modify ThirdParty.txt — and only after explicit permission
+- Do NOT modify PROMPT.txt, DEVLOG.txt, Notes.txt (ChatGPT's files)
+- Ask for permission before every change, state exactly what will change
+
+DESIGN RULES (check every review)
+-----------------------------------
+- Workers do NOT print
+- Workers do NOT aggregate
+- Engine aggregates results
+- S3 layer only performs low-level S3 work
+- Strict separation: discovery / execution / presentation
+
+OPEN ITEMS
+----------
+[7]  upload_jobs.go — filepath.Walk, prefer WalkDir
+[8]  UploadFolder — no fail-fast / ctx cancel on error
+[9]  No tests anywhere in the project
+[15] isRetryableDeleteError — fragile string matching fallback
+[16] download workers print in verbose — design rule violation
+[17] download workers — no retry logic
+[18] download errCh never written — silent partial failures
+[19] UploadFolder result.Files — unbounded memory growth
+[20] BuildUploadJobs — not streaming, loads all paths upfront
+[21] ListObjects — double-buffers all objects (lister + engine)
+[22] PutObject — hard 5GB limit, no multipart upload
+
+================================================================================
+  SESSION RULES
+================================================================================
+
+ONE TOPIC PER SESSION:
+  review / update ThirdParty.txt / teach / deep dive
+
+HANDOFF MESSAGE IS MANDATORY before any review. Without it, Claude asks.
+READ ONLY FILES LISTED IN THE HANDOFF MESSAGE. No blind scans.
+RECYCLE SESSIONS OFTEN — start a new session per topic.
+
+HANDOFF TEMPLATE (paste at start of Cowork session):
+-----------------------------------------------------
+FILES CHANGED   :
+FILES ADDED     :
+FILES DELETED   :
+CHATGPT CLAIMS  :
+OPEN QUESTION   :
+SESSION TOPIC   : review / update / teach / deep dive
+
+================================================================================
+  REVIEW MODES
+================================================================================
+
+MODE 1 — quick
+  Read  : STATUS block + git log --oneline only
+  Do    : flag anything obviously wrong
+  Output: max 10 bullet points
+
+MODE 2 — thorough
+  Read  : this file + handoff files only
+  Do    : verify claims, check design rules, check open items
+  Output: structured findings + propose ThirdParty.txt updates
+
+MODE 3 — subject [name the subject]
+  Read  : only files relevant to that subject
+  Do    : focused deep analysis, ignore everything else
+  Output: detailed findings + proposed recommendations
+
+MODE 4 — changelog
+  Read  : git log -5 + only files touched in those commits
+  Do    : verify commits match what was claimed
+  Output: confirmed / contradicted / flagged per commit
+
+================================================================================

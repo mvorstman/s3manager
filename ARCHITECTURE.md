@@ -58,3 +58,7 @@ main.go
       → UploadFolderResult
       → PrintUploadFolderResult()
 ```
+
+Delete pipeline:
+
+Lister → Batch Builder → Jobs Channel → Worker Pool → S3 DeleteObjects → Results Channel → Collector → Summary

@@ -118,3 +118,6 @@ PROJECT.md > ROADMAP.md > ARCHITECTURE.md > README.md > DEVLOG.txt
 
 Final design decisions are made by the project owner.
 AI suggestions are advisory only.
+
+delete:
+  --batch-size int (default: 1000, max: 1000)

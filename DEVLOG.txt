@@ -35,6 +35,35 @@ LEARNINGS:
 NEXT STEP:
 - 
 
+--------------------------------------------------------
+
+FOCUS:
+Delete engine redesign (Phase 2)
+
+CHANGES:
+- Implemented streaming delete pipeline
+- Added batching via DeleteObjects (1000 max)
+- Introduced worker pool model
+- Added retry logic with exponential backoff
+- Added configurable batch-size CLI flag
+- Added verbose worker-level logging
+- Improved separation of concerns (engine vs worker vs collector)
+
+RESULT:
+- Stable large-scale delete pipeline
+- Successfully tested up to 200,000 objects
+- Achieved ~4700 objects/sec throughput
+- No failures or retries under normal conditions
+
+BENCHMARK:
+workers | batch | objects | duration | throughput
+--------|-------|---------|----------|------------
+40      | 1000  | 200000  | 42s      | ~4700 obj/s
+
+-----------------------------------------------
+
+
+
 DATE (YYYY-MM-DD HH:MM): 2026-04-12 23:20
 
 FOCUS:

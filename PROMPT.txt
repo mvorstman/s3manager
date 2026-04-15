@@ -46,7 +46,7 @@ Last completed milestone:
 - Established CLI_SPEC.md as source of truth
 
 Current focus:
-Delete engine redesign for large-scale S3 operations
+Evaluate next feature after delete engine (list improvements or next pipeline)
 
 Next step:
 - Review current delete implementation
@@ -67,3 +67,36 @@ Instructions for ChatGPT in the next session:
 - Avoid unrelated optimizations or feature expansions
 
 Start by helping me review and analyze the current delete implementation in internal/engine/delete.go.
+
+Last completed milestone:
+Phase 2 delete engine completed and validated at scale (200k objects)
+
+Key learnings:
+- batching is critical for S3 performance
+- concurrency must be bounded
+- collector pattern simplifies aggregation and observability
+- retry belongs in worker layer
+
+OUTPUT STYLE
+
+Default: short
+
+Short:
+- SUMMARY (1–3 lines)
+- ISSUES (bullets, only if relevant)
+- ACTION (clear next steps)
+
+Normal:
+- Short + brief explanation
+
+Deep:
+- Full architect-level explanation
+
+Rules:
+- No long explanations unless explicitly requested
+- No repetition of known context
+- Be concise and actionable
+
+Optional:
+Ultra-short:
+- 1–2 lines max (summary + action only)

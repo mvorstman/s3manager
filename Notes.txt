@@ -1,543 +1,252 @@
-package engine
-
-import (
-	"context"
-	"errors"
-	"fmt"
-	"net"
-	"strings"
-	"sync"
-	"sync/atomic"
-	"syscall"
-	"time"
-
-	"github.com/aws/aws-sdk-go-v2/aws"
-	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
-	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
-	types "github.com/aws/aws-sdk-go-v2/service/s3/types"
-	smithy "github.com/aws/smithy-go"
-)
-
-const MaxDeleteBatchSize = 1000
-
-type DeleteResult struct {
-	Bucket           string
-	Prefix           string
-	DryRun           bool
-	ListedPages      int
-	Queued           int64
-	Deleted          int64
-	Failed           int64
-	BatchCalls       int64
-	TotalRetries     int64
-	BatchesWithRetry int64
-	Duration         time.Duration
-}
-
-type DeleteBatchJob struct {
-	BatchID int64
-	Objects []types.ObjectIdentifier
-}
-
-type DeleteBatchResult struct {
-	BatchID       int64
-	Requested     int
-	DeletedKeys   []string
-	FailedDetails []DeleteObjectFailure
-	Retries       int
-	Err           error
-}
-
-type DeleteObjectFailure struct {
-	Key     string
-	Code    string
-	Message string
-}
-
-func DeletePrefix(
-	ctx context.Context,
-	client *awss3.Client,
-	bucket, prefix string,
-	maxKeys int32,
-	dryRun bool,
-	workers int,
-	verbose bool,
-	allowEmptyPrefix bool,
-) (DeleteResult, error) {
-	if prefix == "" && !allowEmptyPrefix {
-		return DeleteResult{}, fmt.Errorf("for delete, --prefix is required unless --allow-empty-prefix-delete=true is set")
-	}
-	if workers < 1 {
-		workers = 1
-	}
-	if maxKeys < 1 {
-		maxKeys = 1000
-	}
-
-	start := time.Now()
-	result := DeleteResult{
-		Bucket: bucket,
-		Prefix: prefix,
-		DryRun: dryRun,
-	}
-
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	var queued int64
-	var deleted int64
-	var failed int64
-	var batchCalls int64
-	var totalRetries int64
-	var batchesWithRetry int64
-
-	if dryRun {
-		err := runDeleteDryRun(ctx, client, bucket, prefix, maxKeys, verbose, &result, &queued)
-		if err != nil {
-			return result, err
-		}
-
-		result.Queued = atomic.LoadInt64(&queued)
-		result.Duration = time.Since(start)
-		return result, nil
-	}
-
-	jobs := make(chan DeleteBatchJob, workers*2)
-	resultsCh := make(chan DeleteBatchResult, workers*2)
-	errCh := make(chan error, 1)
-
-	var workerWG sync.WaitGroup
-	startDeleteWorkers(
-		ctx,
-		cancel,
-		client,
-		bucket,
-		workers,
-		verbose,
-		jobs,
-		resultsCh,
-		&workerWG,
-	)
-
-	var collectorWG sync.WaitGroup
-	startDeleteResultCollector(
-		resultsCh,
-		errCh,
-		verbose,
-		&deleted,
-		&failed,
-		&batchCalls,
-		&totalRetries,
-		&batchesWithRetry,
-		&collectorWG,
-	)
-
-	var nextBatchID int64
-	var continuationToken *string
-	batch := make([]types.ObjectIdentifier, 0, MaxDeleteBatchSize)
-
-	for {
-		result.ListedPages++
-
-		resp, err := client.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{
-			Bucket:            aws.String(bucket),
-			Prefix:            aws.String(prefix),
-			ContinuationToken: continuationToken,
-			MaxKeys:           aws.Int32(maxKeys),
-		})
-		if err != nil {
-			close(jobs)
-			workerWG.Wait()
-			close(resultsCh)
-			collectorWG.Wait()
-			return result, fmt.Errorf("list objects for delete failed on page %d: %w", result.ListedPages, err)
-		}
-
-		for _, obj := range resp.Contents {
-			atomic.AddInt64(&queued, 1)
-
-			if verbose {
-				key := strings.TrimRight(aws.ToString(obj.Key), "\x00")
-				fmt.Printf("Queue delete %s\t%d\n", key, aws.ToInt64(obj.Size))
-			}
-
-			batch = append(batch, types.ObjectIdentifier{Key: obj.Key})
-			if len(batch) == MaxDeleteBatchSize {
-				var flushErr error
-				batch, flushErr = flushDeleteBatch(ctx, jobs, errCh, batch, &nextBatchID)
-				if flushErr != nil {
-					close(jobs)
-					workerWG.Wait()
-					close(resultsCh)
-					collectorWG.Wait()
-					return result, flushErr
-				}
-			}
-		}
-
-		if !aws.ToBool(resp.IsTruncated) {
-			break
-		}
-		continuationToken = resp.NextContinuationToken
-	}
-
-	var flushErr error
-	batch, flushErr = flushDeleteBatch(ctx, jobs, errCh, batch, &nextBatchID)
-	if flushErr != nil {
-		close(jobs)
-		workerWG.Wait()
-		close(resultsCh)
-		collectorWG.Wait()
-		return result, flushErr
-	}
-
-	close(jobs)
-	workerWG.Wait()
-	close(resultsCh)
-	collectorWG.Wait()
-
-	select {
-	case err := <-errCh:
-		return result, err
-	default:
-	}
-
-	result.Queued = atomic.LoadInt64(&queued)
-	result.Deleted = atomic.LoadInt64(&deleted)
-	result.Failed = atomic.LoadInt64(&failed)
-	result.BatchCalls = atomic.LoadInt64(&batchCalls)
-	result.TotalRetries = atomic.LoadInt64(&totalRetries)
-	result.BatchesWithRetry = atomic.LoadInt64(&batchesWithRetry)
-	result.Duration = time.Since(start)
-	return result, nil
-}
-
-func runDeleteDryRun(
-	ctx context.Context,
-	client *awss3.Client,
-	bucket, prefix string,
-	maxKeys int32,
-	verbose bool,
-	result *DeleteResult,
-	queued *int64,
-) error {
-	var continuationToken *string
-
-	for {
-		result.ListedPages++
-
-		resp, err := client.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{
-			Bucket:            aws.String(bucket),
-			Prefix:            aws.String(prefix),
-			ContinuationToken: continuationToken,
-			MaxKeys:           aws.Int32(maxKeys),
-		})
-		if err != nil {
-			return fmt.Errorf("list objects for dry-run failed on page %d: %w", result.ListedPages, err)
-		}
-
-		for _, obj := range resp.Contents {
-			atomic.AddInt64(queued, 1)
-
-			if verbose {
-				key := strings.TrimRight(aws.ToString(obj.Key), "\x00")
-				fmt.Printf("DRY-RUN would delete %s\t%d\n", key, aws.ToInt64(obj.Size))
-			}
-		}
-
-		if !aws.ToBool(resp.IsTruncated) {
-			break
-		}
-		continuationToken = resp.NextContinuationToken
-	}
-
-	return nil
-}
-
-func startDeleteWorkers(
-	ctx context.Context,
-	cancel context.CancelFunc,
-	client *awss3.Client,
-	bucket string,
-	workers int,
-	verbose bool,
-	jobs <-chan DeleteBatchJob,
-	resultsCh chan<- DeleteBatchResult,
-	wg *sync.WaitGroup,
-) {
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-
-		go func(workerID int) {
-			defer wg.Done()
-
-			for job := range jobs {
-				if ctx.Err() != nil {
-					return
-				}
-
-				batchResult := deleteWorker(ctx, client, bucket, verbose, workerID, job)
-
-				select {
-				case resultsCh <- batchResult:
-				case <-ctx.Done():
-					return
-				}
-
-				if batchResult.Err != nil {
-					cancel()
-					return
-				}
-			}
-		}(i + 1)
-	}
-}
-
-func deleteWorker(
-	ctx context.Context,
-	client *awss3.Client,
-	bucket string,
-	verbose bool,
-	workerID int,
-	job DeleteBatchJob,
-) DeleteBatchResult {
-	backoffs := []time.Duration{
-		200 * time.Millisecond,
-		500 * time.Millisecond,
-		1 * time.Second,
-	}
-
-	var lastErr error
-	retries := 0
-
-	for attempt := 1; attempt <= len(backoffs)+1; attempt++ {
-		resp, err := client.DeleteObjects(ctx, &awss3.DeleteObjectsInput{
-			Bucket: aws.String(bucket),
-			Delete: &types.Delete{
-				Objects: job.Objects,
-				Quiet:   aws.Bool(!verbose),
-			},
-		})
-		if err == nil {
-			result := DeleteBatchResult{
-				BatchID:   job.BatchID,
-				Requested: len(job.Objects),
-				Retries:   retries,
-			}
-
-			for _, obj := range resp.Deleted {
-				result.DeletedKeys = append(result.DeletedKeys, aws.ToString(obj.Key))
-			}
-
-			for _, delErr := range resp.Errors {
-				result.FailedDetails = append(result.FailedDetails, DeleteObjectFailure{
-					Key:     aws.ToString(delErr.Key),
-					Code:    aws.ToString(delErr.Code),
-					Message: aws.ToString(delErr.Message),
-				})
-			}
-
-			if len(result.DeletedKeys) == 0 && len(result.FailedDetails) == 0 {
-				for _, obj := range job.Objects {
-					result.DeletedKeys = append(result.DeletedKeys, aws.ToString(obj.Key))
-				}
-			}
-
-			return result
-		}
-
-		lastErr = err
-
-		if ctx.Err() != nil {
-			return DeleteBatchResult{
-				BatchID:   job.BatchID,
-				Requested: len(job.Objects),
-				Retries:   retries,
-				Err:       ctx.Err(),
-			}
-		}
-
-		if attempt > len(backoffs) || !isRetryableDeleteError(err) {
-			break
-		}
-
-		retries++
-
-		select {
-		case <-time.After(backoffs[attempt-1]):
-		case <-ctx.Done():
-			return DeleteBatchResult{
-				BatchID:   job.BatchID,
-				Requested: len(job.Objects),
-				Retries:   retries,
-				Err:       ctx.Err(),
-			}
-		}
-	}
-
-	return DeleteBatchResult{
-		BatchID:   job.BatchID,
-		Requested: len(job.Objects),
-		Retries:   retries,
-		Err:       fmt.Errorf("delete batch failed in worker %d after %d attempt(s): %w", workerID, retries+1, lastErr),
-	}
-}
-
-func isRetryableDeleteError(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	var netErr net.Error
-	if errors.As(err, &netErr) {
-		return true
-	}
-
-	var opErr *net.OpError
-	if errors.As(err, &opErr) {
-		return true
-	}
-
-	if errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ETIMEDOUT) {
-		return true
-	}
-
-	var respErr *awshttp.ResponseError
-	if errors.As(err, &respErr) {
-		return true
-	}
-
-	var apiErr smithy.APIError
-	if errors.As(err, &apiErr) {
-		code := apiErr.ErrorCode()
-		switch code {
-		case "SlowDown",
-			"Throttling",
-			"ThrottlingException",
-			"RequestTimeout",
-			"RequestTimeoutException",
-			"InternalError",
-			"InternalServerError",
-			"ServiceUnavailable",
-			"503",
-			"500":
-			return true
-		}
-	}
-
-	msg := strings.ToLower(err.Error())
-	retryHints := []string{
-		"timeout",
-		"timed out",
-		"connection reset",
-		"connection refused",
-		"broken pipe",
-		"temporary",
-		"temporarily unavailable",
-		"throttle",
-		"slowdown",
-		"service unavailable",
-		"internal error",
-	}
-
-	for _, hint := range retryHints {
-		if strings.Contains(msg, hint) {
-			return true
-		}
-	}
-
-	return false
-}
-
-func startDeleteResultCollector(
-	resultsCh <-chan DeleteBatchResult,
-	errCh chan<- error,
-	verbose bool,
-	deleted *int64,
-	failed *int64,
-	batchCalls *int64,
-	totalRetries *int64,
-	batchesWithRetry *int64,
-	wg *sync.WaitGroup,
-) {
-	wg.Add(1)
-
-	go func() {
-		defer wg.Done()
-
-		for batchResult := range resultsCh {
-			if batchResult.Err != nil {
-				select {
-				case errCh <- batchResult.Err:
-				default:
-				}
-				continue
-			}
-
-			atomic.AddInt64(batchCalls, 1)
-			atomic.AddInt64(deleted, int64(len(batchResult.DeletedKeys)))
-			atomic.AddInt64(failed, int64(len(batchResult.FailedDetails)))
-			atomic.AddInt64(totalRetries, int64(batchResult.Retries))
-			if batchResult.Retries > 0 {
-				atomic.AddInt64(batchesWithRetry, 1)
-			}
-
-			if verbose {
-				for _, key := range batchResult.DeletedKeys {
-					fmt.Printf("Deleted %s\n", key)
-				}
-				for _, failure := range batchResult.FailedDetails {
-					fmt.Printf("Delete failed for %s: [%s] %s\n", failure.Key, failure.Code, failure.Message)
-				}
-			}
-		}
-	}()
-}
-
-func flushDeleteBatch(
-	ctx context.Context,
-	jobs chan<- DeleteBatchJob,
-	errCh <-chan error,
-	batch []types.ObjectIdentifier,
-	nextBatchID *int64,
-) ([]types.ObjectIdentifier, error) {
-	if len(batch) == 0 {
-		return batch, nil
-	}
-
-	out := make([]types.ObjectIdentifier, len(batch))
-	copy(out, batch)
-
-	job := DeleteBatchJob{
-		BatchID: atomic.AddInt64(nextBatchID, 1),
-		Objects: out,
-	}
-
-	select {
-	case jobs <- job:
-		return batch[:0], nil
-	case err := <-errCh:
-		return batch, err
-	case <-ctx.Done():
-		return batch, ctx.Err()
-	}
-}
-
-func PrintDeleteResult(result DeleteResult) {
-	fmt.Println("Delete summary")
-	fmt.Printf("  Bucket: %s\n", result.Bucket)
-	fmt.Printf("  Prefix: %s\n", result.Prefix)
-	fmt.Printf("  Dry-run: %v\n", result.DryRun)
-	fmt.Printf("  Listed pages: %d\n", result.ListedPages)
-	fmt.Printf("  Queued: %d\n", result.Queued)
-	if result.DryRun {
-		fmt.Printf("  Would delete: %d\n", result.Queued)
-	} else {
-		fmt.Printf("  Batch calls: %d\n", result.BatchCalls)
-		fmt.Printf("  Deleted: %d\n", result.Deleted)
-		fmt.Printf("  Failed: %d\n", result.Failed)
-		fmt.Printf("  Batches with retries: %d\n", result.BatchesWithRetry)
-		fmt.Printf("  Total retries: %d\n", result.TotalRetries)
-	}
-	fmt.Printf("  Duration: %s\n", result.Duration.Round(time.Millisecond))
-}
+
+bucket: temp-8155
+region: us-east-1
+endpoint: https://s3-nl03.cloud.dm-p.com
+
+cd C:\dev\s3manager
+dir
+Get-Content .\main.go
+go run .
+
+mkdir C:\dev\s3manager -Force
+cd C:\dev\s3manager
+go mod init s3manager
+
+cd C:\dev\s3manager
+gofmt -w .\main.go
+go run .
+
+
+
+
+go run . --endpoint https://s3-nl03.cloud.dm-p.com --region us-east-1 --access-key J8LQFJKXA6DJZ31JAVHS --secret-key jpEVTH/ZmY4IGJHDkcowPR26WSf7v6Fo73Lwh5CE --bucket temp-8155
+
+
+List
+--------------------------------------------
+go run . `
+--action list `
+--endpoint https://s3-nl03.cloud.dm-p.com `
+--region us-east-1 `
+--access-key J8LQFJKXA6DJZ31JAVHS `
+--secret-key jpEVTH/ZmY4IGJHDkcowPR26WSf7v6Fo73Lwh5CE `
+--bucket temp-8155 `
+--max-keys 5
+
+
+Upload
+---------------------------------------------
+go run . `
+--action upload `
+--endpoint https://s3-nl03.cloud.dm-p.com `
+--region us-east-1 `
+--access-key J8LQFJKXA6DJZ31JAVHS `
+--secret-key jpEVTH/ZmY4IGJHDkcowPR26WSf7v6Fo73Lwh5CE `
+--bucket temp-8155 `
+--file C:\test\test.txt `
+--key test.txt
+
+Upload Folder
+------------------------------------------
+go run . `
+--action upload-folder `
+--endpoint https://s3-nl03.cloud.dm-p.com `
+--region us-east-1 `
+--access-key J8LQFJKXA6DJZ31JAVHS `
+--secret-key jpEVTH/ZmY4IGJHDkcowPR26WSf7v6Fo73Lwh5CE `
+--bucket temp-8155 `
+--folder C:\temp\s3-test-data `
+--prefix TF/
+--workers 8
+
+
+Download
+-------------------------------------------
+go run . `
+--action download `
+--endpoint https://s3-nl03.cloud.dm-p.com `
+--region us-east-1 `
+--access-key J8LQFJKXA6DJZ31JAVHS `
+--secret-key jpEVTH/ZmY4IGJHDkcowPR26WSf7v6Fo73Lwh5CE `
+--bucket temp-8155 `
+--key test.txt `
+--out C:\temp\downloaded-test.txt
+
+
+Delete
+------------------------------------------
+go run . `
+--action delete `
+--endpoint https://s3-nl03.cloud.dm-p.com `
+--region us-east-1 `
+--access-key J8LQFJKXA6DJZ31JAVHS `
+--secret-key jpEVTH/ZmY4IGJHDkcowPR26WSf7v6Fo73Lwh5CE `
+--bucket temp-8155 `
+--prefix test `
+--max-keys 5 `
+--dry-run=true
+
+
+go run . `
+>> --action delete `
+>> --endpoint https://s3-nl03.cloud.dm-p.com `
+>> --region us-east-1 `
+>> --access-key J8LQFJKXA6DJZ31JAVHS `
+>> --secret-key jpEVTH/ZmY4IGJHDkcowPR26WSf7v6Fo73Lwh5CE `
+>> --bucket temp-8155 `
+>> --prefix TF `
+>> --max-keys 10 `
+>> --dry-run=false
+
+go run . `
+--action delete `
+--endpoint https://s3-nl03.cloud.dm-p.com `
+--region us-east-1 `
+--access-key YOURKEY `
+--secret-key YOURSECRET `
+--bucket temp-8155 `
+--prefix TF/ `
+--max-keys 1000 `
+--dry-run=false `
+--workers 4 `
+--verbose=true
+
+
+
+===== ENVIRONMENT =====
+# Load environment variables (preferred over inline secrets)
+source ~/.s3manager-env
+
+# Expected env vars:
+# export S3_ENDPOINT='https://s3-endpoint'
+# export AWS_REGION='us-east-1'
+# export AWS_ACCESS_KEY_ID='YOUR_KEY'
+# export AWS_SECRET_ACCESS_KEY='YOUR_SECRET'
+
+
+===== QUICK START =====
+go run .
+
+
+===== BASIC COMMANDS =====
+
+# List (with pagination)
+go run . \
+  --action list \
+  --bucket temp-8155 \
+  --prefix "" \
+  --max-keys 5
+
+
+# Upload single file
+go run . \
+  --action upload \
+  --bucket temp-8155 \
+  --file ./test.txt \
+  --key "test.txt"
+
+
+# Upload folder (parallel)
+go run . \
+  --action upload-folder \
+  --bucket temp-8155 \
+  --folder ./data \
+  --prefix "TF/" \
+  --workers 8
+
+
+# Download single object
+go run . \
+  --action download \
+  --bucket temp-8155 \
+  --key "test.txt" \
+  --out ./download/test.txt
+
+
+# Delete by prefix (SAFE: dry-run first)
+go run . \
+  --action delete \
+  --bucket temp-8155 \
+  --prefix "TF/" \
+  --max-keys 1000 \
+  --workers 4 \
+  --dry-run=true
+
+
+# Delete by prefix (REAL RUN — BE CAREFUL)
+go run . \
+  --action delete \
+  --bucket temp-8155 \
+  --prefix "TF/" \
+  --max-keys 1000 \
+  --workers 4 \
+  --dry-run=false
+
+
+===== TEST DATASET =====
+# Create dataset
+mkdir -p ~/s3manager-test/temp-8155-uploadset
+
+python3 - <<'PY'
+import os
+import random
+from pathlib import Path
+
+root = Path.home() / "s3manager-test" / "temp-8155-uploadset"
+root.mkdir(parents=True, exist_ok=True)
+
+random.seed(42)
+
+file_count = 2000
+max_depth = 4
+folder_span = 6
+
+for i in range(file_count):
+    depth = random.randint(0, max_depth)
+    parts = [f"folder{random.randint(1, folder_span)}" for _ in range(depth)]
+    d = root.joinpath(*parts)
+    d.mkdir(parents=True, exist_ok=True)
+
+    filename = f"file_{i:06d}.txt"
+    size = random.choice([1024, 2048, 4096, 8192])
+
+    with open(d / filename, "wb") as f:
+        f.write(os.urandom(size))
+
+print(f"Created {file_count} files under {root}")
+PY
+
+
+===== VALIDATION =====
+find ~/s3manager-test/temp-8155-uploadset -type f | wc -l
+du -sh ~/s3manager-test/temp-8155-uploadset
+
+
+===== BENCHMARK =====
+go run . --action upload-folder --bucket temp-8155 --folder ~/s3manager-test/temp-8155-uploadset --workers 1 --prefix "bench-1/"
+go run . --action upload-folder --bucket temp-8155 --folder ~/s3manager-test/temp-8155-uploadset --workers 8 --prefix "bench-8/"
+go run . --action upload-folder --bucket temp-8155 --folder ~/s3manager-test/temp-8155-uploadset --workers 40 --prefix "bench-40/"
+
+
+===== SAFETY =====
+- NEVER delete with empty prefix unless explicitly intended
+- ALWAYS run with --dry-run=true first
+- Validate with list before delete
+- Use dedicated prefixes per test
+
+
+===== GIT WORKFLOW =====
+# Basic update
+git add .
+git commit -m "<message>"
+git push
+
+# Versioned release
+git tag vX.Y.Z
+git push origin vX.Y.Z
+
+
+===== NOTES =====
+- Workload is I/O bound
+- Optimal workers ~40–60
+- Prefer env vars over inline credentials
