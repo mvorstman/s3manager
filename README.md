@@ -65,7 +65,12 @@ Design principles:
 - Engine handles aggregation
 - S3 layer is stateless and focused
 
+
 For detailed internal design and data flow, see `ARCHITECTURE.md`.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/mvorstman/s3manager/main/s3manager-diagram.svg" width="800"/>
+</p>
 
 ---
 
