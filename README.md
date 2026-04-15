@@ -30,6 +30,14 @@ Status: Stable CLI with parallel operations
 - live progress reporting
 - retry visibility in summary
 
+- High-performance delete engine:
+  - Streaming listing
+  - Batched deletes (up to 1000 objects/request)
+  - Parallel worker pool
+  - Retry with backoff
+
+  
+
 ### In Progress
 
 - Improve progress output formatting (single-line updates)
@@ -87,7 +95,7 @@ export AWS_SECRET_ACCESS_KEY='YOUR_SECRET'
 ```bash
 go run . \
   --action upload \
-  --bucket temp-8155 \
+  --bucket bucket \
   --file ./file.txt \
   --key "test/file.txt"
 ```
@@ -97,7 +105,7 @@ go run . \
 ```bash
 go run . \
   --action upload-folder \
-  --bucket temp-8155 \
+  --bucket bucket \
   --folder ./data \
   --prefix "test/" \
   --workers 40
@@ -108,7 +116,7 @@ go run . \
 ```bash
 go run . \
   --action list \
-  --bucket temp-8155 \
+  --bucket bucket \
   --prefix "test/"
 ```
 
@@ -117,7 +125,7 @@ go run . \
 ```bash
 go run . \
   --action download-prefix \
-  --bucket temp-8155 \
+  --bucket bucket \
   --prefix "test/" \
   --out-dir ./download \
   --workers 40
@@ -128,7 +136,7 @@ go run . \
 ```bash
 go run . \
   --action delete \
-  --bucket temp-8155 \
+  --bucket bucket \
   --prefix "test/" \
   --workers 40 \
   --dry-run=true
@@ -139,7 +147,7 @@ go run . \
 ```bash
 go run . \
   --action delete \
-  --bucket temp-8155 \
+  --bucket bucket \
   --prefix "" \
   --allow-empty-prefix-delete=true \
   --workers 40 \
