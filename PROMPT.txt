@@ -1,102 +1,159 @@
-Current status:
-- Cleanup phase completed
-- CLI contract standardized (single --prefix flag)
-- s3_download_prefix.go removed
-- lister refactored (no stdout in S3 layer)
-- engine layer handles all output
-- ContentType detection added to uploader
-- README.md, Notes.txt, CLI_SPEC.md aligned with implementation
-- Code builds cleanly (go build ./...)
+===== S3MANAGER PROJECT =====
 
-Current architecture (validated):
+S3Manager is a Go-based CLI tool for managing S3-compatible object storage systems such as:
+- NetApp StorageGRID
+- Quantum ActiveScale
+- MinIO
+
+This project is both:
+- a production-grade tooling effort
+- a structured learning path in Go, system design, and S3 internals
+
+---
+
+===== GOALS =====
+
+1. Become an S3 expert
+   - Deep understanding of S3 APIs and behavior
+   - Understand performance characteristics at scale
+
+2. Build production-grade tooling
+   - Reliable
+   - Predictable performance
+   - Safe for destructive operations
+
+3. Learn system design
+   - Concurrency patterns
+   - Streaming pipelines
+   - Backpressure handling
+   - Observability
+
+---
+
+===== ARCHITECTURE =====
+
 - main -> CLI / argument parsing / user-facing output
 - engine -> orchestration, worker pool logic, aggregation
 - internal/s3 -> low-level S3 operations
 
-Design rules (enforced):
+Design rules:
 - Workers do NOT print
 - Workers do NOT aggregate
 - Engine aggregates results
 - S3 layer only performs low-level S3 work
-- Separation between discovery, execution, and presentation
+- Strict separation between discovery, execution, and presentation
 
-Environment setup:
+---
+
+===== CURRENT STATUS =====
+
+- Cleanup phase completed
+- CLI contract standardized (single --prefix flag)
+- delete pipeline implemented with batching and worker pool
+- configurable batch size supported (--batch-size)
+- lightweight instrumentation added to delete pipeline:
+  - total batches
+  - average batch size
+  - delete latency (avg/min/max)
+  - enqueue wait (avg/max)
+  - deletes/sec
+- code builds cleanly (go build ./...)
+
+Key findings from latest tests:
+- batching is efficient (~950 avg size)
+- enqueue wait is negligible (no backpressure)
+- delete API latency dominates runtime
+- bottleneck is backend/API path, not batching stage
+
+---
+
+===== CURRENT FOCUS =====
+
+- Build a solid foundation first
+- Stabilize delete pipeline
+- Standardize behavior across commands
+- Keep architecture clean and predictable
+
+Benchmarking:
+- Used as validation tool only
+- Not a primary development focus
+
+---
+
+===== NEXT STEP =====
+
+1. Stabilize delete implementation:
+   - ensure predictable behavior
+   - validate retry handling
+   - ensure summary output is consistent
+
+2. Standardize command behavior across all actions:
+   - validation
+   - summary output
+   - result structures
+
+3. Strengthen result models:
+   - consistent metrics across commands
+   - prepare for future structured output (--json)
+
+4. Use instrumentation to validate changes (not drive them)
+
+---
+
+===== ENVIRONMENT =====
+
+Load environment variables:
+
 source ~/.s3manager-env
 
-Known test dataset:
+Test dataset:
 - Folder: ~/s3manager-test/temp-8155-uploadset
 - ~2000 files (~7.6 MiB)
 
-Typical test command:
+---
+
+===== TEST COMMANDS =====
+
+Upload:
 go run . \
   --action upload-folder \
   --bucket temp-8155 \
   --folder ~/s3manager-test/temp-8155-uploadset \
   --workers 40 \
-  --prefix "TF-40/"
+  --prefix "test/"
 
-Benchmark conclusion:
-- Workload is I/O bound
-- Optimal worker range ~40–60
-- Parallelism is effective but saturates
+Delete:
+go run . \
+  --action delete \
+  --bucket temp-8155 \
+  --prefix "test/" \
+  --workers 40 \
+  --batch-size 1000 \
+  --dry-run=false
 
-Last completed milestone:
-- Completed full cleanup phase
-- Aligned CLI, architecture, and documentation
-- Established CLI_SPEC.md as source of truth
+List:
+go run . \
+  --action list \
+  --bucket temp-8155 \
+  --prefix "test/"
 
-Current focus:
-Evaluate next feature after delete engine (list improvements or next pipeline)
+---
 
-Next step:
-- Review current delete implementation
-- Redesign into streaming pipeline
-- Implement batch deletes using DeleteObjects (up to 1000 objects per request)
-- Introduce backpressure (bounded channels)
-- Maintain dry-run safety and prefix protection
+===== INSTRUCTIONS FOR CHATGPT =====
 
-Design target for delete pipeline:
-- Lister → batch builder → worker pool → S3 delete → result aggregation
-- No full in-memory buffering of all objects
-
-Instructions for ChatGPT in the next session:
 - Stay focused on S3Manager
-- Use the existing architecture, do not redesign unnecessarily
-- Guide step-by-step
-- Focus on delete engine redesign only
-- Avoid unrelated optimizations or feature expansions
+- Act as senior software architect + teacher
+- Prefer step-by-step improvements
+- Provide structured output:
+  1. Summary
+  2. Issues
+  3. Improvements
+  4. Design insights
+  5. Next steps
 
-Start by helping me review and analyze the current delete implementation in internal/engine/delete.go.
+- Do NOT redesign unnecessarily
+- Do NOT prioritize benchmarking over architecture
+- Challenge design decisions when needed
+- Keep outputs production-oriented and concise
 
-Last completed milestone:
-Phase 2 delete engine completed and validated at scale (200k objects)
-
-Key learnings:
-- batching is critical for S3 performance
-- concurrency must be bounded
-- collector pattern simplifies aggregation and observability
-- retry belongs in worker layer
-
-OUTPUT STYLE
-
-Default: short
-
-Short:
-- SUMMARY (1–3 lines)
-- ISSUES (bullets, only if relevant)
-- ACTION (clear next steps)
-
-Normal:
-- Short + brief explanation
-
-Deep:
-- Full architect-level explanation
-
-Rules:
-- No long explanations unless explicitly requested
-- No repetition of known context
-- Be concise and actionable
-
-Optional:
-Ultra-short:
-- 1–2 lines max (summary + action only)
+Start by helping me stabilize and standardize the delete implementation.

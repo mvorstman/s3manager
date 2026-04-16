@@ -35,6 +35,44 @@ LEARNINGS:
 NEXT STEP:
 - 
 
+================================================================================
+DATE: 2026-04-16
+
+FOCUS:
+Delete pipeline instrumentation and batch-size stabilization
+
+CHANGES:
+- Added lightweight instrumentation to delete pipeline:
+  - Total batches
+  - Average batch size
+  - Delete API latency (avg/min/max)
+  - Enqueue wait time (avg/max)
+  - Deletes/sec
+- Restored and validated configurable delete batch size (--batch-size)
+- Ensured delete pipeline remains streaming and bounded (no full in-memory buffering)
+- Kept architecture intact (no redesign, only instrumentation)
+
+RESULT:
+- Delete pipeline now provides clear visibility into performance characteristics
+- First real-world test (~20k objects) showed:
+  - Efficient batching (~950 avg batch size)
+  - No enqueue/backpressure (0s wait)
+  - High delete latency dominates runtime (~10s avg per batch)
+- Confirms bottleneck is in S3 backend/API path, not batching stage
+
+LEARNINGS:
+- Batching is critical and working as expected
+- Backend behavior (MinIO vs StorageGRID) significantly impacts performance
+- Instrumentation is valuable for validation, not a primary feature
+- Foundation-first approach is correct; avoid premature optimization
+
+NEXT STEP:
+- Stabilize delete implementation further
+- Standardize command behavior and result structures across actions
+- Use instrumentation selectively to validate future changes
+- Keep benchmarking as a secondary validation tool
+================================================================================
+
 --------------------------------------------------------
 
 FOCUS:
