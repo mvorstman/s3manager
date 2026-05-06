@@ -7,6 +7,65 @@ Track progress, decisions, benchmarks, and learnings during development.
 ===== CURRENT FOCUS =====
 Implement live progress reporting in UploadFolder
 
+================================================================================
+DATE: 2026-05-06
+
+FOCUS:
+Rocky Linux development environment, StorageGRID validation, and delete benchmark
+readiness
+
+CHANGES:
+- Rocky VM development environment is operational
+- Codex workflow is operational on Rocky
+- StorageGRID connectivity validated from the Rocky environment
+- Added AGENTS.md with AI agent architecture instructions and guardrails
+- Added scripts/validate.sh as the standard repository validation command
+- Added reproducible local dataset generation under ~/s3manager-test
+- Added medium and large benchmark dataset generation
+- Refactored delete pipeline to use bounded batch channels, worker pools, and a
+  collector-owned aggregation path
+- Added delete concurrency tests to verify multiple DeleteObjects batches can be
+  in flight concurrently
+
+RESULT:
+- Development, validation, and benchmark workflows now run from the Rocky VM
+- Codex can make scoped repository changes and validate with one standard script
+- StorageGRID upload and delete workflows were validated against clean,
+  reproducible datasets
+- Delete pipeline architecture now aligns better with AGENTS.md:
+  - workers execute DeleteObjects only
+  - aggregation and metrics are owned by the engine collector
+  - dry-run and delete safeguards remain intact
+
+BENCHMARK:
+Upload:
+- Objects: 20,000 files
+- Bytes: 76,800,000
+- Duration: ~44.56s
+- Throughput: ~1.64 MiB/s
+
+Delete:
+- Objects: 20,000
+- Batches: 20
+- Avg batch latency: ~10.6s
+- Total duration: ~13.4s
+- Throughput: ~1489 deletes/sec
+
+LEARNINGS:
+- StorageGRID DeleteObjects latency per batch is high
+- Parallel batch execution compensates effectively
+- Small datasets underutilize delete workers because 2,000 objects create only
+  2 delete batches
+- Larger delete benchmark datasets are needed to show worker pool behavior
+  clearly
+- Isolated benchmark prefixes keep StorageGRID tests understandable and safe
+
+NEXT STEP:
+- Continue delete pipeline testing with the large 20,000-object dataset
+- Use isolated prefixes such as bench/upload-medium/, bench/delete-medium/, and
+  dev/codex/
+- Preserve dry-run-first workflow for destructive operations
+
 
 ===== ENTRY TEMPLATE =====
 

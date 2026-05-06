@@ -1,4 +1,72 @@
 
+===== ROCKY VM WORKFLOW =====
+
+- Primary repository path: ~/s3manager
+- Development environment: Rocky Linux VM
+- Editor workflow: VS Code Remote SSH into the Rocky VM
+- Agent workflow: Codex runs directly on Rocky
+- Review workflow: Mac is used for architecture review, planning, and broader
+  design discussion
+
+
+===== SSH CONFIG =====
+
+Host Dev
+  LocalForward 1455 localhost:1455
+
+
+===== REPRODUCIBLE TEST DATASETS =====
+
+Root:
+~/s3manager-test/
+
+Structure:
+~/s3manager-test/
+  smoke/
+  datasets/small/
+  datasets/medium/
+  datasets/large/
+  benchmarks/
+
+Generation:
+./scripts/create-test-dataset.sh
+
+Medium dataset:
+- Path: ~/s3manager-test/datasets/medium
+- Purpose: smoke and performance sanity checks
+- Files: 2,000
+- Sizes: 1 KiB, 2 KiB, 4 KiB, 8 KiB
+- Deterministic randomized nested layout
+
+Large dataset:
+- Path: ~/s3manager-test/datasets/large
+- Purpose: delete concurrency validation
+- Files: 20,000
+- Sizes: 1 KiB, 2 KiB, 4 KiB, 8 KiB
+- Deterministic randomized nested layout
+
+
+===== BENCHMARK GUIDANCE =====
+
+- Do not use existing StorageGRID test files as the main benchmark dataset
+- Use isolated StorageGRID prefixes for each workflow
+- Medium dataset is for smoke/performance sanity checks
+- Large dataset is for delete worker pool and DeleteObjects concurrency
+  validation
+- 2,000 objects create only 2 delete batches at batch-size 1000, which
+  underutilizes delete workers
+- 20,000 objects create 20 delete batches and provide enough work to show
+  parallel batch execution
+
+Suggested prefixes:
+- smoke/basic/
+- bench/upload-medium/
+- bench/delete-medium/
+- bench/upload-large/
+- bench/delete-large/
+- dev/codex/
+
+
 bucket: temp-8155
 region: us-east-1
 endpoint: https://s3-nl03.cloud.dm-p.com
