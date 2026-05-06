@@ -155,7 +155,20 @@ func DeletePrefix(
 		return result, nil
 	}
 
-	jobs := make(chan []types.ObjectIdentifier, workers*2)
+	type deleteBatch struct {
+		objects []types.ObjectIdentifier
+	}
+
+	type deleteBatchResult struct {
+		size    int
+		deleted []types.DeletedObject
+		errors  []types.Error
+		latency time.Duration
+		err     error
+	}
+
+	batches := make(chan deleteBatch, workers*2)
+	results := make(chan deleteBatchResult, workers)
 	errCh := make(chan error, workers+1)
 
 	var wg sync.WaitGroup
@@ -164,7 +177,7 @@ func DeletePrefix(
 		go func(workerID int) {
 			defer wg.Done()
 
-			for batch := range jobs {
+			for batch := range batches {
 				if ctx.Err() != nil {
 					return
 				}
@@ -173,45 +186,97 @@ func DeletePrefix(
 				resp, err := client.DeleteObjects(ctx, &awss3.DeleteObjectsInput{
 					Bucket: aws.String(bucket),
 					Delete: &types.Delete{
-						Objects: batch,
+						Objects: batch.objects,
 						Quiet:   aws.Bool(!verbose),
 					},
 				})
 				deleteLatency := time.Since(deleteStart)
 
-				atomic.AddInt64(&batchCalls, 1)
-				atomic.AddInt64(&deleteLatencyTotalNs, deleteLatency.Nanoseconds())
-				updateAtomicMin(&deleteLatencyMinNs, deleteLatency.Nanoseconds())
-				updateAtomicMax(&deleteLatencyMaxNs, deleteLatency.Nanoseconds())
+				batchResult := deleteBatchResult{
+					size:    len(batch.objects),
+					latency: deleteLatency,
+				}
+				if err != nil {
+					batchResult.err = fmt.Errorf("delete batch failed in worker %d: %w", workerID, err)
+				} else {
+					batchResult.deleted = resp.Deleted
+					batchResult.errors = resp.Errors
+				}
+
+				select {
+				case results <- batchResult:
+				case <-ctx.Done():
+					return
+				}
 
 				if err != nil {
 					select {
-					case errCh <- fmt.Errorf("delete batch failed in worker %d: %w", workerID, err):
+					case errCh <- batchResult.err:
 					default:
 					}
 					cancel()
 					return
 				}
-
-				deletedCount := int64(len(resp.Deleted))
-				failedCount := int64(len(resp.Errors))
-				if deletedCount == 0 && failedCount == 0 {
-					deletedCount = int64(len(batch))
-				}
-
-				atomic.AddInt64(&deleted, deletedCount)
-				atomic.AddInt64(&failed, failedCount)
-
-				if verbose {
-					for _, obj := range resp.Deleted {
-						fmt.Printf("Deleted %s\n", aws.ToString(obj.Key))
-					}
-					for _, delErr := range resp.Errors {
-						fmt.Printf("Delete failed for %s: %s\n", aws.ToString(delErr.Key), aws.ToString(delErr.Message))
-					}
-				}
 			}
 		}(i + 1)
+	}
+
+	collectorDone := make(chan struct{})
+	go func() {
+		defer close(collectorDone)
+
+		for batchResult := range results {
+			atomic.AddInt64(&batchCalls, 1)
+			atomic.AddInt64(&totalBatches, 1)
+			atomic.AddInt64(&totalBatchObjects, int64(batchResult.size))
+			atomic.AddInt64(&deleteLatencyTotalNs, batchResult.latency.Nanoseconds())
+			updateAtomicMin(&deleteLatencyMinNs, batchResult.latency.Nanoseconds())
+			updateAtomicMax(&deleteLatencyMaxNs, batchResult.latency.Nanoseconds())
+
+			if batchResult.err != nil {
+				select {
+				case errCh <- batchResult.err:
+				default:
+				}
+				cancel()
+				continue
+			}
+
+			deletedCount := int64(len(batchResult.deleted))
+			failedCount := int64(len(batchResult.errors))
+			if deletedCount == 0 && failedCount == 0 {
+				deletedCount = int64(batchResult.size)
+			}
+
+			atomic.AddInt64(&deleted, deletedCount)
+			atomic.AddInt64(&failed, failedCount)
+
+			if verbose {
+				for _, obj := range batchResult.deleted {
+					fmt.Printf("Deleted %s\n", aws.ToString(obj.Key))
+				}
+				for _, delErr := range batchResult.errors {
+					fmt.Printf("Delete failed for %s: %s\n", aws.ToString(delErr.Key), aws.ToString(delErr.Message))
+				}
+			}
+		}
+	}()
+
+	closeBatchesAndWait := func() {
+		close(batches)
+		wg.Wait()
+		close(results)
+		<-collectorDone
+	}
+
+	closeBatchesAndWaitWithError := func(fallback error) error {
+		closeBatchesAndWait()
+		select {
+		case err := <-errCh:
+			return err
+		default:
+			return fallback
+		}
 	}
 
 	var continuationToken *string
@@ -228,11 +293,9 @@ func DeletePrefix(
 		enqueueStart := time.Now()
 
 		select {
-		case jobs <- out:
+		case batches <- deleteBatch{objects: out}:
 			enqueueWait := time.Since(enqueueStart)
 
-			atomic.AddInt64(&totalBatches, 1)
-			atomic.AddInt64(&totalBatchObjects, int64(len(out)))
 			atomic.AddInt64(&enqueueWaitTotalNs, enqueueWait.Nanoseconds())
 			updateAtomicMax(&enqueueWaitMaxNs, enqueueWait.Nanoseconds())
 
@@ -257,9 +320,9 @@ func DeletePrefix(
 			MaxKeys:           aws.Int32(maxKeys),
 		})
 		if err != nil {
-			close(jobs)
-			wg.Wait()
-			return result, fmt.Errorf("list objects for delete failed on page %d: %w", result.ListedPages, err)
+			return result, closeBatchesAndWaitWithError(
+				fmt.Errorf("list objects for delete failed on page %d: %w", result.ListedPages, err),
+			)
 		}
 
 		for _, obj := range resp.Contents {
@@ -273,9 +336,7 @@ func DeletePrefix(
 			batch = append(batch, types.ObjectIdentifier{Key: obj.Key})
 			if len(batch) == batchSize {
 				if err := flushBatch(); err != nil {
-					close(jobs)
-					wg.Wait()
-					return result, err
+					return result, closeBatchesAndWaitWithError(err)
 				}
 			}
 		}
@@ -287,13 +348,10 @@ func DeletePrefix(
 	}
 
 	if err := flushBatch(); err != nil {
-		close(jobs)
-		wg.Wait()
-		return result, err
+		return result, closeBatchesAndWaitWithError(err)
 	}
 
-	close(jobs)
-	wg.Wait()
+	closeBatchesAndWait()
 
 	select {
 	case err := <-errCh:
